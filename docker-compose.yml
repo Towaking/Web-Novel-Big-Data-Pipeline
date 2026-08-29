@@ -1,0 +1,168 @@
+# ============================================================
+# Local Big Data Stack - Novel Analytics & Hybrid AI Pipeline
+#
+# Topologi:
+#   minio        -> Data Lake (S3-compatible) : raw / clean / curated
+#   minio-init   -> job sekali jalan, membuat bucket + policy
+#   spark-master -> koordinator cluster standalone
+#   spark-worker -> executor (scalable: --scale spark-worker=N)
+#   pipeline     -> driver container tempat job Fase 1-4 disubmit
+#   streamlit    -> layer presentasi (Fase 5)
+#
+# Semua compute service memakai image yang sama (bigdata-novel:base)
+# agar versi Python/PySpark konsisten antara driver dan executor.
+# ============================================================
+
+x-spark-common: &spark-common
+  image: bigdata-novel:base
+  build:
+    context: ./docker
+    dockerfile: Dockerfile
+  env_file: .env
+  volumes:
+    - ./:/opt/project
+    - ivy-cache:/home/spark/.ivy2
+  networks: [bigdata-net]
+
+services:
+
+  # ---------------------------------------------------------
+  # 1. Object Storage (Data Lake)
+  # ---------------------------------------------------------
+  minio:
+    image: minio/minio:${MINIO_IMAGE_TAG:-latest}
+    container_name: novel-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks: [bigdata-net]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------
+  # 2. Bootstrap bucket (idempotent, exit setelah selesai)
+  # ---------------------------------------------------------
+  minio-init:
+    image: minio/mc:${MC_IMAGE_TAG:-latest}
+    container_name: novel-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    env_file: .env
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD} &&
+      mc mb --ignore-existing local/$${BUCKET_RAW} &&
+      mc mb --ignore-existing local/$${BUCKET_CLEAN} &&
+      mc mb --ignore-existing local/$${BUCKET_CURATED} &&
+      echo '[minio-init] buckets siap:' &&
+      mc ls local
+      "
+    networks: [bigdata-net]
+    restart: "no"
+
+  # ---------------------------------------------------------
+  # 3. Spark Standalone Master
+  # ---------------------------------------------------------
+  spark-master:
+    <<: *spark-common
+    container_name: novel-spark-master
+    hostname: spark-master
+    command: >
+      spark-class org.apache.spark.deploy.master.Master
+      --host spark-master --port 7077 --webui-port 8080
+    ports:
+      - "${SPARK_MASTER_UI_PORT:-8080}:8080"
+      - "7077:7077"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------
+  # 4. Spark Worker (scale: docker compose up --scale spark-worker=3)
+  # ---------------------------------------------------------
+  spark-worker:
+    <<: *spark-common
+    command: >
+      spark-class org.apache.spark.deploy.worker.Worker
+      spark://spark-master:7077 --webui-port 8081
+    environment:
+      SPARK_WORKER_CORES: ${SPARK_WORKER_CORES:-2}
+      SPARK_WORKER_MEMORY: ${SPARK_WORKER_MEMORY:-3G}
+      # Default work-dir Spark ada di dalam $SPARK_HOME (site-packages,
+      # milik root) sedangkan container berjalan sebagai user `spark`.
+      # Tanpa override ini worker mati saat createWorkDir -> app WAITING selamanya.
+      SPARK_WORKER_DIR: /tmp/spark-work
+      SPARK_LOCAL_DIRS: /tmp/spark-local
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    ports:
+      # Rentang host-port supaya `--scale spark-worker=N` tidak bentrok.
+      - "${SPARK_WORKER_UI_PORT:-8081}-8085:8081"
+    restart: unless-stopped
+
+  # ---------------------------------------------------------
+  # 5. Driver / Job Runner (tempat submit Fase 1-4)
+  #    Idle by default -> jalankan job via `docker compose exec`.
+  # ---------------------------------------------------------
+  pipeline:
+    <<: *spark-common
+    container_name: novel-pipeline
+    hostname: pipeline
+    environment:
+      SPARK_DRIVER_HOST: pipeline
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+      spark-master:
+        condition: service_healthy
+    command: ["tail", "-f", "/dev/null"]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------
+  # 6. Presentation Layer (Fase 5)
+  # ---------------------------------------------------------
+  streamlit:
+    <<: *spark-common
+    container_name: novel-streamlit
+    hostname: streamlit
+    environment:
+      SPARK_DRIVER_HOST: streamlit
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    command: >
+      streamlit run app/streamlit_app.py
+      --server.port=8501
+      --server.address=0.0.0.0
+      --server.headless=true
+    ports:
+      - "${STREAMLIT_PORT:-8501}:8501"
+    restart: unless-stopped
+
+networks:
+  bigdata-net:
+    driver: bridge
+    name: novel-bigdata-net
+
+volumes:
+  minio-data:
+    name: novel-minio-data
+  ivy-cache:
+    name: novel-ivy-cache

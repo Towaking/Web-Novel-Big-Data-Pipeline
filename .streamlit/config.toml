@@ -1,0 +1,24 @@
+# ============================================================
+# Tema aplikasi — identitas visual produk.
+# Didefinisikan eksplisit supaya tampilan konsisten di semua
+# perangkat, tidak bergantung preferensi terang/gelap browser.
+# ============================================================
+
+[theme]
+base = "dark"
+primaryColor = "#7C5CFF"
+backgroundColor = "#0D1117"
+secondaryBackgroundColor = "#161B26"
+textColor = "#E6E9EF"
+font = "sans serif"
+
+[server]
+headless = true
+fileWatcherType = "poll"
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+showErrorDetails = false
