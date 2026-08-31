@@ -124,3 +124,126 @@ WR = (v / (v + m)) * R + (m / (v + m)) * C
    fase tersebut dieksekusi; baris `tags == "Unknown"` dikeluarkan dari training.
 4. **Fase 5 (Deploy):** visualisasi menampilkan populasi yang dipakai
    (n tervalidasi vs n total) supaya pembaca dashboard tidak salah tafsir.
+
+---
+
+## 5. Audit lanjutan (2026-08-30) — apa lagi yang bisa diperbaiki
+
+Bagian 1–4 mengunci keputusan yang sudah dipakai sejak awal. Bagian ini
+melaporkan audit berikutnya: setiap dugaan perbaikan diuji dengan angka, lalu
+**diterima atau ditolak secara eksplisit**. Yang ditolak tetap ditulis, karena
+tanpa itu orang berikutnya akan mencoba hal yang sama lagi.
+
+### 5.1 Diterima — `release_frequency` diurai jadi angka
+
+Kolom ini sebelumnya hanya lewat sebagai teks (`"Every 0.9 Day(s)"`) dan tidak
+dipakai fase mana pun.
+
+| Ukuran | Nilai |
+|---|---|
+| Baris yang berhasil diurai | **4.460 dari 4.461 (100%)** — sisanya `Unknown` |
+| Sebaran hari/bab | median 37,3 · p10 3,0 · p90 630,8 · maks 20.610 |
+| Korelasi `log(hari/bab)` ~ `rating_score` (n=2.058, ≥10 suara) | r = −0,089 |
+| Korelasi `log(hari/bab)` ~ `weighted_rating` (kueri Fase 3) | **r = −0,099** |
+
+Korelasinya **lebih kuat** daripada korelasi jumlah bab dengan rating (−0,0875)
+yang selama ini jadi temuan utama Fase 3. Artinya: novel yang bab barunya lama
+datang dinilai sedikit lebih rendah. Dua kolom turunan ditambahkan di Fase 2:
+
+- `days_per_chapter` (double) — dipakai Head D sebagai fitur.
+- `release_pace` (string, 5 kelompok) — dipakai analitik Fase 3.
+
+Fitur ini **bukan** fitur popularitas: kecepatan terbit adalah keputusan
+penulis/penerjemah, bukan turunan jumlah suara, jadi tidak membocorkan target
+seperti `rating_votes`.
+
+### 5.2 Diterima — satu `chapter_count` terpotong pemisah ribuan
+
+`status_coo` menuliskan jumlah bab lengkap dengan koma. Dibandingkan pada
+3.021 baris yang kedua sumbernya terisi: **3.020 cocok persis, 1 tidak.**
+
+| Judul | `chapter_count` | `status_coo` | Seharusnya |
+|---|---|---|---|
+| The Quick Transmigrating Cannon Fodder Chooses… | 593 | `1,593 Chapters (Completed)` | **1.593** |
+
+Diperbaiki di Fase 2, dengan syarat ketat: hanya bila digit ekor angka utuh
+sama persis dengan nilai kolom (ciri pemotongan pada koma). Tanpa syarat itu,
+perbedaan wajar — status basi vs kolom yang lebih baru — ikut tertimpa.
+
+### 5.3 Ditolak — sentinel `chapter_count = 0` tidak dapat dipulihkan
+
+Dugaan: 902 baris ber-`chapter_count = 0` masih menyimpan angkanya di
+`status_coo`. **Salah.** Dari 902 baris itu, yang `status_coo`-nya memuat
+jumlah bab: **0**; yang memuat jumlah volume: **0**. Sentinel ini memang
+berarti benar-benar tidak diketahui.
+
+Catatan terkait: 538 baris ber-`chapter_count > 0` tidak punya angka bab di
+`status_coo` karena satuannya volume (`"2 Volumes (Complete)"`) — light novel
+terbit per jilid, bukan per bab. Bukan kesalahan data.
+
+### 5.4 Ditolak — `year = 0` juga tidak dapat dipulihkan
+
+Dari 1.011 baris sentinel, hanya **1** yang `status_coo`-nya memuat pola tahun.
+Tidak ada sumber pemulihan di dalam baris.
+
+### 5.5 Ditolak — menggabungkan genre dari kedua berkas
+
+Berkas sinopsis juga punya kolom `genres`, dan 649 baris (14,5%) berbeda dari
+tabel fakta. Terlihat seperti label yang bisa dipulihkan — ternyata bukan:
+
+| Genre "tambahan" | Jumlah |
+|---|---|
+| **Completed** | **556** |
+| Supernatural | 6 |
+| Adventure | 5 |
+| sisanya (11 genre) | ≤3 masing-masing |
+
+**`Completed` adalah status penerjemahan, bukan genre.** Setelah dikeluarkan,
+seluruh sisa tambahan hanya ~35 label pada 4.461 novel. Kardinalitas label
+praktis tidak berubah (4,24 → 4,26 per novel). Keputusan bagian 1 —
+`data_novel.csv` sebagai sumber kebenaran — tetap berlaku.
+
+### 5.6 Ditolak — melengkapi genre yang hilang dari `tags`
+
+Hipotesis: sebagian genre yang benar tidak dituliskan kurator, dan `tags`
+(759 tag unik, jauh lebih rinci daripada 33 genre) bisa memulihkannya.
+
+Diuji dengan aturan implikasi empiris — tag dianggap mengimplikasikan genre
+bila `P(genre | tag) ≥ 0,80` **dan** lift ≥ 1,8. Terkumpul 62 aturan; sebuah
+genre dianggap hilang bila **≥2 tag berbeda** menyepakatinya.
+
+| Ukuran | Nilai |
+|---|---|
+| Positif tercatat | 18.787 |
+| Positif hilang (dugaan) | **108 (+0,6%)** |
+| Novel terdampak | 106 dari 4.460 (2,4%) |
+
+Terlalu kecil untuk mengubah apa pun, dan 97 dari 108 hanya pada satu genre
+(`Action`). **Label pada dataset ini tidak sistematis tidak lengkap.**
+
+Pemeriksaan silang memperkuatnya: di antara 7.287 positif palsu model,
+hanya **0,9%** didukung ≥2 tag implikatif. Angka itu memang ~25× lebih tinggi
+daripada sel negatif biasa (0,04%) — jadi arahnya benar, sebagian kecil
+"kesalahan" model memang label yang hilang — tetapi besarannya jauh terlalu
+kecil untuk menjelaskan jarak menuju batas atas.
+
+**Konsekuensi:** batas atas ~0,653 makro-F1 di [model_card.md](model_card.md)
+**bukan** akibat label yang tidak lengkap, melainkan label yang memang
+subjektif. Menaikkannya butuh pelabelan ulang, bukan pembersihan otomatis.
+
+### 5.7 Catatan — ruang label mencampur tiga taksonomi
+
+Dari 33 genre, yang dipakai model 24 (≥50 novel). Yang dibuang sebagian besar
+adalah **label demografi**, bukan genre: `Josei` (29), `Shounen` (18),
+`Seinen` (15), `Shoujo` (4). Di antara 24 yang dipakai pun masih tercampur:
+
+| Jenis label | Contoh | F1 model |
+|---|---|---|
+| Genre sungguhan | Romance, Fantasy, Action | 0,78–0,84 |
+| Rating konten | Mature, Adult, Ecchi | 0,32–0,42 |
+| Nada cerita | Psychological, Tragedy | 0,33–0,42 |
+
+Tiga jenis label ini ditentukan oleh hal yang berbeda, dan yang bukan genre
+sungguhan konsisten mendapat skor terendah. Memisahkannya menjadi beberapa
+tugas prediksi adalah arah perbaikan berikutnya yang paling menjanjikan —
+belum dikerjakan karena mengubah definisi tugas, bukan sekadar modelnya.

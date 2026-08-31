@@ -11,14 +11,18 @@ Dataset ini punya tiga sifat yang menentukan pilihan model:
    harus berbasis konten.
 2. **Sinyal teksnya campuran prosa + label.** Korpus = `title` + `synopsis` +
    `tags`: sinopsis (median 118 kata, cakupan 98,45%) memberi konteks naratif,
-   sementara tag memberi label semantik yang sudah ternormalisasi. Panjang
-   segini masih jauh di bawah kebutuhan fine-tuning transformer, tetapi sangat
-   cocok untuk bag-of-words berbobot: TF-IDF menangkap kekhasan frasa seperti
-   "Time Loop" atau "Cultivation" dengan sangat baik pada skala 4.4k dokumen.
+   sementara tag memberi label semantik yang sudah ternormalisasi. TF-IDF
+   menangkap kekhasan frasa seperti "Time Loop" atau "Cultivation" dengan
+   sangat baik pada skala 4.4k dokumen; yang TIDAK ditangkapnya adalah
+   parafrasa — dua sinopsis bercerita sama dengan kata berbeda tidak berbagi
+   satu token pun. Di situlah blok embedding pralatih menyumbang.
    Novel tanpa sinopsis tetap punya sinyal dari tag, jadi tidak ada yang gugur.
-3. **Skalanya kecil (4.4k baris).** Deep learning di sini akan *overfit* dan
-   tidak memberi keuntungan nyata dibanding model linear/ensemble klasik,
-   sekaligus membuat latensi *AI Playground* melar dari milidetik ke detik.
+3. **Skalanya kecil (4.4k baris).** Jaringan yang embedding-nya dilatih DARI
+   NOL di sini *overfit* dan kalah dari model linear (lihat BiLSTM di model
+   card). Yang berhasil bukan membentuk representasi sendiri, melainkan
+   **memakai** representasi pralatih sebagai blok fitur tambahan — biayanya
+   49 ms per inferensi (vs 26 ms untuk SVM murni), ditambah ~5 detik sekali
+   saja saat encoder dimuat ke proses.
 
 Karena itu arsitekturnya adalah **satu representasi bersama, empat kepala model**
 (*shared representation, multi-head*):
@@ -37,9 +41,10 @@ Karena itu arsitekturnya adalah **satu representasi bersama, empat kepala model*
    │           (cosine kNN)   (KMeans+silh.)    (HistGradientBoosting)
    ├── Logistic Regression  (linear, TF-IDF sparse)
    ├── Linear SVM           (margin, kalibrasi Platt)
-   └── Neural Network MLP   (2 lapis, embedding LSA 240-d)
+   ├── Hybrid TF-IDF+BGE    (sparse + padat pralatih)  <- terbaik
+   └── BiLSTM + Attention   (rekuren, embedding dari nol)
 
-Head A punya TIGA model yang dapat dipilih pengguna di dashboard; ketiganya
+Head A punya EMPAT model yang dapat dipilih pengguna di dashboard; keempatnya
 dilatih dan diuji pada pembagian data yang sama sehingga perbandingannya adil.
 Detail arsitektur & penyetelan ambangnya ada di `src/phases/genre_models.py`.
 
@@ -121,17 +126,37 @@ def load_training_frame() -> tuple[pd.DataFrame, list[str]]:
             "series_id", "title", "url", "corpus_clean", "genre_list", "primary_genre",
             "type_origin", "type", "year", "chapter_count", "n_tags", "token_count",
             "is_completed", "rating_score", "rating_votes", "weighted_rating",
-            "is_rated_reliable", "reading_list_count", "tags",
+            "is_rated_reliable", "reading_list_count", "tags", "synopsis_clean",
+            # Sinopsis MENTAH — tidak dipotong dan tidak dibersihkan. Dipakai
+            # blok embedding Head A: encoder pralatih dilatih pada kalimat utuh,
+            # jadi memberinya `corpus_clean` yang sudah di-stem dan dibuang
+            # stopword-nya justru menjauhkan masukan dari distribusi latihnya.
+            "synopsis",
             # Sinopsis dipotong 400 karakter: cukup untuk cuplikan di dashboard,
             # tanpa membuat artefak katalog membengkak beberapa megabyte.
             F.substring(F.col("synopsis"), 1, 400).alias("synopsis_snippet"),
             "synopsis_word_count", "has_synopsis",
+            # Kecepatan rilis (hari per bab) — fitur numerik baru untuk Head D.
+            "days_per_chapter",
         )
         pdf = selected.toPandas()
 
         # Daftar stopword yang PERSIS dipakai Fase 2 ikut disimpan sebagai
         # artefak, supaya jalur inferensi tidak pernah menyimpang dari training.
         stopwords = list(StopWordsRemover.loadDefaultStopWords("english")) + list(DOMAIN_STOPWORDS)
+
+    # Urutan baris DIKUNCI sebelum apa pun memakainya.
+    #
+    # `split_indices` membagi data berdasarkan posisi baris, sedangkan urutan
+    # hasil `toPandas()` bergantung pada bagaimana Spark kebetulan mempartisi
+    # dan menggabungkan hasil — tidak dijamin sama antar eksekusi. Tanpa
+    # pengurutan ini, dua kali menjalankan Fase 4 pada data yang identik bisa
+    # menghasilkan pembagian dev/uji yang berbeda, dan macro-F1 bergeser
+    # ~0,003 tanpa satu baris kode model pun berubah. Selisih sebesar itu
+    # cukup untuk membuat perbandingan antar-arsitektur lintas-run keliru.
+    #
+    # `series_id` dipakai karena ia kunci unik dataset (lihat data_contract.md).
+    pdf = pdf.sort_values("series_id", kind="mergesort").reset_index(drop=True)
 
     logger.info("Data training dimuat: %s baris, %s kolom", f"{len(pdf):,}", len(pdf.columns))
     return pdf, stopwords
@@ -175,58 +200,35 @@ def build_representation(corpus: pd.Series) -> tuple[TfidfVectorizer, TruncatedS
 # HEAD A — Genre Tagger (klasifikasi multi-label)
 # ===========================================================================
 def build_genre_frame(pdf: pd.DataFrame) -> pd.DataFrame:
+    """Bentuk tabel fitur Head A (delegasi ke paket pipeline)."""
+    from Model.pipeline.preprocessing import build_feature_frame
+
+    return build_feature_frame(pdf)
+
+
+def train_genre_tagger(pdf: pd.DataFrame, names: list | None = None) -> tuple[dict, MultiLabelBinarizer, dict]:
     """
-    Siapkan tabel fitur masukan untuk ketiga model genre.
+    Latih arsitektur genre tagger dan kembalikan seluruhnya.
 
-    Kolomnya harus sama persis saat training dan inferensi — daftarnya
-    dikunci di `genre_models.FEATURE_COLUMNS`.
-    """
-    return pd.DataFrame(
-        {
-            "corpus_clean": pdf["corpus_clean"].fillna(""),
-            # Tag diubah dari "A, B, C" menjadi teks biasa supaya bisa
-            # divektorkan terpisah dari korpus gabungan.
-            "tags_clean": pdf["tags"].fillna("").str.lower().str.replace(",", " ", regex=False),
-            "type_origin": pdf["type_origin"].fillna("UNKNOWN"),
-            "type": pdf["type"].fillna("UNKNOWN"),
-        }
-    )
-
-
-def train_genre_tagger(pdf: pd.DataFrame) -> tuple[dict, MultiLabelBinarizer, dict]:
-    """
-    Latih tiga arsitektur genre tagger dan kembalikan seluruhnya.
-
-    Pengguna memilih model mana yang dipakai di dashboard, jadi ketiganya
+    Pengguna memilih model mana yang dipakai di dashboard, jadi semuanya
     disimpan sebagai artefak — bukan hanya pemenangnya. Detail arsitektur,
-    pembobotan fitur, dan penyetelan ambang ada di `src/phases/genre_models.py`.
+    rekayasa fitur, augmentasi, dan penyetelan ambang ada di `Model/pipeline/`.
     """
-    labels_raw = [list(g) if g is not None else [] for g in pdf["genre_list"]]
+    from Model.pipeline import train as pipeline_train
+    from Model.pipeline.preprocessing import build_label_matrix
 
-    # Genre langka dibuang: dengan <50 contoh, kelas tersebut hanya menghasilkan
-    # klasifikator yang selalu memprediksi "tidak" dan mengaburkan macro-F1.
-    counts = pd.Series([g for row in labels_raw for g in row]).value_counts()
-    kept = sorted(counts[counts >= MIN_GENRE_SUPPORT].index.tolist())
-    labels_raw = [[g for g in row if g in kept] for row in labels_raw]
-    logger.info("Genre dipakai: %d dari %d (ambang >= %d novel)", len(kept), len(counts), MIN_GENRE_SUPPORT)
+    y, kept, mlb = build_label_matrix(pdf["genre_list"], MIN_GENRE_SUPPORT)
+    total_genres = len({g for row in pdf["genre_list"] if row is not None for g in row})
+    logger.info("Genre dipakai: %d dari %d (ambang >= %d novel)", len(kept), total_genres, MIN_GENRE_SUPPORT)
 
-    mlb = MultiLabelBinarizer(classes=kept)
-    y = mlb.fit_transform(labels_raw)
     frame = build_genre_frame(pdf)
-
-    # Split 80/20. Indeks dipisah lebih dulu (bukan memotong DataFrame
-    # berkali-kali) agar ketiga model dilatih dan diuji pada baris yang persis
-    # sama — kalau tidak, perbandingan antar model jadi tidak adil.
-    # Penyetelan ambang memakai probabilitas out-of-fold di dalam set
-    # pengembangan, sehingga tidak perlu mengorbankan porsi data lagi.
-    indices = np.arange(len(frame))
-    dev_idx, test_idx = train_test_split(indices, test_size=TEST_SIZE, random_state=RANDOM_STATE)
+    dev_idx, test_idx = pipeline_train.split_indices(len(frame))
     logger.info(
-        "Pembagian data: pengembangan=%s (ambang via OOF 3-fold), uji=%s",
-        f"{len(dev_idx):,}", f"{len(test_idx):,}",
+        "Pembagian data: pengembangan=%s (ambang via OOF %d-fold), uji=%s",
+        f"{len(dev_idx):,}", 3, f"{len(test_idx):,}",
     )
 
-    artifacts, metrics = genre_models.train_all(frame, y, kept, dev_idx, test_idx)
+    artifacts, metrics = pipeline_train.train_all(frame, y, kept, dev_idx, test_idx, names=names)
     metrics.update(
         {
             "n_labels": len(kept),
@@ -315,6 +317,19 @@ def build_numeric_features(pdf: pd.DataFrame) -> tuple[np.ndarray, list[str]]:
             "token_count": pdf["token_count"].fillna(0),
             "year": pdf["year"].fillna(pdf["year"].median()),
             "is_completed": pdf["is_completed"].fillna(0),
+            # Kecepatan rilis: novel yang bab barunya lama datang dinilai
+            # sedikit lebih rendah (r = -0,089 terhadap rating, sekuat korelasi
+            # jumlah bab). Di-log karena ekornya panjang — dari rilis harian
+            # sampai judul terbengkalai bertahun-tahun.
+            #
+            # Ini BUKAN fitur popularitas: kecepatan terbit adalah keputusan
+            # penulis/penerjemah, bukan turunan dari jumlah suara, sehingga
+            # tidak membocorkan target seperti `rating_votes`.
+            "log_days_per_chapter": np.log1p(
+                pdf["days_per_chapter"].fillna(pdf["days_per_chapter"].median())
+                if "days_per_chapter" in pdf.columns
+                else pd.Series(np.zeros(len(pdf)), index=pdf.index)
+            ),
         }
     )
     frame = pd.concat([frame, origin_dummies, type_dummies], axis=1)
@@ -443,7 +458,8 @@ def run() -> dict:
     logger.info(">> Membangun representasi bersama (TF-IDF -> SVD)")
     vectorizer, svd, tfidf, embeddings = build_representation(pdf["corpus_clean"].fillna(""))
 
-    logger.info(">> HEAD A: genre tagger (3 arsitektur, multi-label)")
+    logger.info(">> HEAD A: genre tagger (%d arsitektur, multi-label)",
+                len(genre_models.MODEL_CATALOG))
     genre_artifacts, mlb, metrics_a = train_genre_tagger(pdf)
 
     logger.info(">> HEAD B: content-based recommender")
@@ -459,7 +475,7 @@ def run() -> dict:
     catalog = pdf[
         ["series_id", "title", "url", "primary_genre", "genre_list", "tags", "type_origin",
          "year", "chapter_count", "rating_score", "rating_votes", "weighted_rating", "n_tags",
-         "synopsis_snippet", "synopsis_word_count"]
+         "synopsis_snippet", "synopsis_word_count", "days_per_chapter"]
     ].copy()
     catalog["cluster_id"] = kmeans.labels_
     catalog["genre_list"] = catalog["genre_list"].apply(lambda g: list(g) if g is not None else [])
@@ -472,7 +488,7 @@ def run() -> dict:
     save_artifacts(
         vectorizer=vectorizer,
         svd=svd,
-        # Ketiga model genre disimpan sekaligus — pengguna dashboard memilih
+        # Seluruh model genre disimpan sekaligus — pengguna dashboard memilih
         # mana yang dipakai, jadi yang kalah pun tetap harus tersedia.
         genre_models=genre_artifacts,
         genre_binarizer=mlb,

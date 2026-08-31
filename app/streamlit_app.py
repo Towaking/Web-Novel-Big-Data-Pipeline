@@ -1,19 +1,19 @@
 """
-NovelLens — antarmuka produk
-============================
-Aplikasi Streamlit yang menyajikan hasil pipeline sebagai produk siap pakai,
-bukan panel eksperimen. Konsekuensinya pada desain:
+NovelLens — product interface
+=============================
+A Streamlit app that presents the pipeline output as a finished product rather
+than an experiment console. That choice drives the design:
 
-  * Tidak ada detail infrastruktur (endpoint storage, jumlah objek per bucket,
-    daftar centang fase pipeline). Itu urusan operator, bukan pengguna.
-  * Kegagalan backend ditampilkan sebagai pesan manusiawi; jejak teknisnya
-    disembunyikan di balik expander untuk pemelihara.
-  * Angka performa model tetap ditampilkan — di halaman Metodologi — karena
-    pengguna berhak tahu seberapa jauh keluaran AI boleh dipercaya. Yang
-    dibuang adalah artefak proses coba-coba, bukan transparansinya.
+  * No infrastructure details (storage endpoints, per-bucket object counts,
+    pipeline-phase checklists). That is the operator's concern, not the user's.
+  * Backend failures surface as plain-language messages; the technical trace is
+    tucked behind an expander for maintainers.
+  * Model performance numbers stay visible — on the Methodology page — because
+    users deserve to know how far the AI output can be trusted. What was cut is
+    the trial-and-error residue, not the transparency.
 
-Data dibaca dari hasil kueri Spark SQL yang sudah dimaterialisasi (Fase 3);
-tidak ada Spark yang dijalankan dari sini agar interaksi tetap instan.
+Data is read from materialised Spark SQL results (Phase 3); no Spark job runs
+from here, so interaction stays instant.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from src.common.model_registry import ModelNotTrainedError, artifacts_available,
 from src.common.storage import get_s3_client, read_parquet_dir
 
 st.set_page_config(
-    page_title="NovelLens — Intelijen Katalog Novel",
+    page_title="NovelLens — Novel Catalogue Intelligence",
     page_icon="📖",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -38,7 +38,7 @@ st.set_page_config(
 
 SETTINGS = get_settings()
 
-# --- Identitas visual -------------------------------------------------------
+# --- Visual identity -------------------------------------------------------
 BRAND = "#7C5CFF"
 ACCENT = "#22D3A7"
 MUTED = "#8B93A7"
@@ -48,37 +48,83 @@ SCALE = [[0.0, "#1E1B4B"], [0.45, "#5B4BD6"], [0.75, "#7C5CFF"], [1.0, "#22D3A7"
 st.markdown(
     f"""
     <style>
-      .block-container {{padding-top: 2rem; padding-bottom: 4rem; max-width: 1400px;}}
-      header[data-testid="stHeader"] {{background: transparent;}}
+      /* --- Page rhythm ------------------------------------------------ */
+      .block-container {{padding-top: 1.4rem; padding-bottom: 5rem; max-width: 1380px;}}
+      header[data-testid="stHeader"] {{background: transparent; height: 0;}}
+      #MainMenu, footer {{visibility: hidden;}}
 
+      /* A consistent type scale, not a per-element size free-for-all. */
+      h1 {{font-size: 1.95rem; letter-spacing: -.025em; font-weight: 680;}}
+      h2 {{font-size: 1.28rem; letter-spacing: -.015em; font-weight: 640; margin-top: .3rem;}}
+      h3 {{font-size: 1.02rem; letter-spacing: -.01em; font-weight: 620;}}
+
+      /* --- Hero ---------------------------------------------------------- */
       .nl-hero {{
-        padding: 1.6rem 1.8rem; border-radius: 18px; margin-bottom: 1.6rem;
-        background: linear-gradient(135deg, rgba(124,92,255,.22), rgba(34,211,167,.10));
-        border: 1px solid rgba(124,92,255,.30);
+        position: relative; overflow: hidden;
+        padding: 1.75rem 1.9rem; border-radius: 20px; margin-bottom: 1.5rem;
+        background:
+          radial-gradient(1200px 260px at 8% -40%, rgba(124,92,255,.34), transparent 62%),
+          radial-gradient(900px 240px at 92% -30%, rgba(34,211,167,.22), transparent 60%),
+          linear-gradient(160deg, rgba(255,255,255,.045), rgba(255,255,255,.012));
+        border: 1px solid rgba(255,255,255,.10);
+        box-shadow: 0 18px 42px -28px rgba(0,0,0,.9);
       }}
-      .nl-hero h1 {{margin: 0; font-size: 1.9rem; letter-spacing: -.02em;}}
-      .nl-hero p {{margin: .45rem 0 0; color: {MUTED}; font-size: 1rem; max-width: 62ch;}}
+      .nl-hero h1 {{margin: 0;}}
+      .nl-hero p {{margin: .5rem 0 0; color: {MUTED}; font-size: .97rem; max-width: 66ch; line-height: 1.55;}}
+      .nl-eyebrow {{
+        display: inline-block; margin-bottom: .55rem; padding: .2rem .62rem;
+        border-radius: 999px; font-size: .68rem; font-weight: 600;
+        letter-spacing: .1em; text-transform: uppercase;
+        color: #C9BDFF; background: rgba(124,92,255,.16); border: 1px solid rgba(124,92,255,.32);
+      }}
 
+      /* --- Metric cards --------------------------------------------------- */
       .nl-card {{
-        padding: 1.05rem 1.15rem; border-radius: 14px; height: 100%;
-        background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.08);
+        position: relative; height: 100%;
+        padding: 1.05rem 1.15rem; border-radius: 15px;
+        background: linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.018));
+        border: 1px solid rgba(255,255,255,.085);
+        transition: border-color .18s ease, transform .18s ease;
       }}
-      .nl-card .lbl {{color: {MUTED}; font-size: .78rem; text-transform: uppercase;
-                     letter-spacing: .07em; margin-bottom: .35rem;}}
-      .nl-card .val {{font-size: 1.75rem; font-weight: 650; line-height: 1.15;}}
-      .nl-card .sub {{color: {MUTED}; font-size: .82rem; margin-top: .25rem;}}
+      .nl-card:hover {{border-color: rgba(124,92,255,.42); transform: translateY(-2px);}}
+      .nl-card .lbl {{color: {MUTED}; font-size: .72rem; text-transform: uppercase;
+                     letter-spacing: .09em; font-weight: 600; margin-bottom: .4rem;}}
+      .nl-card .val {{font-size: 1.72rem; font-weight: 660; line-height: 1.1;
+                     background: linear-gradient(92deg, #FFFFFF, #C9BDFF);
+                     -webkit-background-clip: text; -webkit-text-fill-color: transparent;}}
+      .nl-card .sub {{color: {MUTED}; font-size: .8rem; margin-top: .35rem; line-height: 1.45;}}
 
+      /* --- Genre chips ----------------------------------------------------- */
       .nl-chip {{
-        display: inline-block; padding: .16rem .6rem; margin: .12rem .22rem .12rem 0;
-        border-radius: 999px; font-size: .75rem; background: rgba(124,92,255,.16);
-        border: 1px solid rgba(124,92,255,.34); color: #C9BDFF;
+        display: inline-block; padding: .18rem .62rem; margin: .14rem .24rem .14rem 0;
+        border-radius: 999px; font-size: .735rem; font-weight: 500;
+        background: rgba(124,92,255,.14); border: 1px solid rgba(124,92,255,.30); color: #C9BDFF;
       }}
-      .nl-chip.on {{background: rgba(34,211,167,.16); border-color: rgba(34,211,167,.4); color: #8FF0D6;}}
+      .nl-chip.on {{background: rgba(34,211,167,.15); border-color: rgba(34,211,167,.40); color: #8FF0D6;}}
 
-      .nl-note {{color: {MUTED}; font-size: .84rem; line-height: 1.5; margin-top: .4rem;}}
-      .nl-syn {{color: #C3C9D8; font-size: .87rem; line-height: 1.55;}}
-      h2, h3 {{letter-spacing: -.01em;}}
-      [data-testid="stMetricValue"] {{font-size: 1.5rem;}}
+      /* --- Supporting text ------------------------------------------------- */
+      .nl-note {{
+        color: {MUTED}; font-size: .83rem; line-height: 1.6; margin-top: .55rem;
+        padding-left: .7rem; border-left: 2px solid rgba(124,92,255,.32);
+      }}
+      .nl-syn {{color: #BFC6D6; font-size: .865rem; line-height: 1.6;}}
+
+      /* --- Tabs, buttons, tables --------------------------------------------- */
+      .stTabs [data-baseweb="tab-list"] {{gap: .35rem; border-bottom: 1px solid rgba(255,255,255,.08);}}
+      .stTabs [data-baseweb="tab"] {{
+        font-size: .9rem; font-weight: 560; padding: .55rem .95rem;
+        border-radius: 9px 9px 0 0;
+      }}
+      .stTabs [aria-selected="true"] {{background: rgba(124,92,255,.12);}}
+      .stButton > button {{border-radius: 10px; font-weight: 580; padding: .5rem 1.05rem;}}
+      div[data-testid="stDataFrame"] {{border-radius: 12px; overflow: hidden;}}
+      [data-testid="stMetricValue"] {{font-size: 1.42rem; font-weight: 640;}}
+      [data-testid="stMetricLabel"] {{color: {MUTED};}}
+      hr {{border-color: rgba(255,255,255,.08);}}
+
+      /* --- Sidebar -------------------------------------------------------- */
+      section[data-testid="stSidebar"] {{border-right: 1px solid rgba(255,255,255,.07);}}
+      section[data-testid="stSidebar"] .stRadio label {{font-size: .92rem;}}
     </style>
     """,
     unsafe_allow_html=True,
@@ -86,15 +132,15 @@ st.markdown(
 
 
 # ---------------------------------------------------------------------------
-# Lapisan data
+# Data layer
 # ---------------------------------------------------------------------------
 class DataUnavailable(RuntimeError):
-    """Data produk belum siap disajikan (pipeline belum dijalankan)."""
+    """Product data is not ready to serve yet (the pipeline has not run)."""
 
 
 @st.cache_data(ttl=900, show_spinner=False)
 def load_table(name: str) -> pd.DataFrame:
-    """Baca satu tabel hasil analitik dari data lake."""
+    """Read one analytics result table from the data lake."""
     try:
         return read_parquet_dir(SETTINGS.minio.bucket_curated, f"analytics/{name}")
     except Exception as exc:
@@ -103,7 +149,7 @@ def load_table(name: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=120, show_spinner=False)
 def backend_online() -> tuple[bool, str]:
-    """Cek ketersediaan penyimpanan data tanpa membocorkan detailnya ke UI."""
+    """Check storage availability without leaking its details into the UI."""
     try:
         get_s3_client(SETTINGS).list_buckets()
         return True, ""
@@ -117,11 +163,13 @@ def get_registry():
 
 
 # ---------------------------------------------------------------------------
-# Komponen UI
+# UI components
 # ---------------------------------------------------------------------------
-def hero(title: str, subtitle: str) -> None:
+def hero(title: str, subtitle: str, eyebrow: str = "") -> None:
+    """Page header: eyebrow label, title, one explanatory sentence."""
+    tag = f'<span class="nl-eyebrow">{eyebrow}</span>' if eyebrow else ""
     st.markdown(
-        f'<div class="nl-hero"><h1>{title}</h1><p>{subtitle}</p></div>',
+        f'<div class="nl-hero">{tag}<h1>{title}</h1><p>{subtitle}</p></div>',
         unsafe_allow_html=True,
     )
 
@@ -141,7 +189,7 @@ def chips(values, active: bool = False) -> str:
 
 
 def style_fig(fig, height: int | None = None):
-    """Samakan gaya seluruh grafik dengan tema aplikasi."""
+    """Match every chart to the app theme."""
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
@@ -166,7 +214,7 @@ def as_list(value) -> list:
 
 
 def novel_card(row: pd.Series, show_similarity: bool = True) -> None:
-    """Kartu hasil rekomendasi: judul, genre, cuplikan sinopsis, metrik."""
+    """Recommendation card: title, genres, synopsis snippet, metrics."""
     with st.container(border=True):
         left, right = st.columns([5, 1])
         with left:
@@ -183,29 +231,30 @@ def novel_card(row: pd.Series, show_similarity: bool = True) -> None:
             rating = row.get("rating_score")
             st.metric("Rating", f"{rating:.1f}" if pd.notna(rating) else "—")
             if show_similarity and pd.notna(row.get("similarity")):
-                st.caption(f"Kemiripan {row['similarity']:.0%}")
+                st.caption(f"Similarity {row['similarity']:.0%}")
 
         meta = []
         if pd.notna(row.get("chapter_count")):
-            meta.append(f"{int(row['chapter_count']):,} bab")
+            meta.append(f"{int(row['chapter_count']):,} chapters")
         if pd.notna(row.get("rating_votes")):
-            meta.append(f"{int(row['rating_votes']):,} suara")
+            meta.append(f"{int(row['rating_votes']):,} votes")
         if isinstance(row.get("type_origin"), str):
             meta.append(row["type_origin"])
         cols = st.columns([4, 1])
         cols[0].caption(" · ".join(meta))
         if isinstance(row.get("url"), str) and row["url"].startswith("http"):
-            cols[1].link_button("Buka", row["url"], use_container_width=True)
+            cols[1].link_button("Open", row["url"], use_container_width=True)
 
 
 # ---------------------------------------------------------------------------
-# HALAMAN — Ringkasan
+# PAGE — Overview
 # ---------------------------------------------------------------------------
 def page_overview() -> None:
     hero(
-        "📖 NovelLens",
-        "Intelijen katalog untuk 4.461 judul web novel: apa yang dibaca orang, "
-        "apa yang mereka nilai tinggi, dan judul apa yang sebaiknya direkomendasikan.",
+        "NovelLens",
+        "Catalogue intelligence for 4,461 web novel titles: what people read, "
+        "what they rate highly, and which titles are worth recommending.",
+        eyebrow="Catalogue overview",
     )
 
     viz = load_table("viz_novels")
@@ -214,16 +263,16 @@ def page_overview() -> None:
     ranking = load_table("genre_ranking").sort_values("avg_weighted_rating", ascending=False)
 
     cols = st.columns(4)
-    card(cols[0], "Judul dalam katalog", f"{len(viz):,}", f"{viz['primary_genre'].nunique()} genre utama")
-    card(cols[1], "Rating rata-rata", f"{viz['weighted_rating'].mean():.2f}",
-         f"{len(reliable):,} judul dengan penilaian mapan")
-    card(cols[2], "Median panjang", f"{viz['chapter_count'].median():,.0f} bab",
-         f"terpanjang {viz['chapter_count'].max():,.0f} bab")
-    card(cols[3], "Genre teratas", genres.iloc[0]["genre"],
-         f"{genres.iloc[0]['pct_of_catalog']:.0f}% dari katalog")
+    card(cols[0], "Titles in catalogue", f"{len(viz):,}", f"{viz['primary_genre'].nunique()} primary genres")
+    card(cols[1], "Average rating", f"{viz['weighted_rating'].mean():.2f}",
+         f"{len(reliable):,} titles with an established score")
+    card(cols[2], "Median length", f"{viz['chapter_count'].median():,.0f} chapters",
+         f"longest {viz['chapter_count'].max():,.0f} chapters")
+    card(cols[3], "Top genre", genres.iloc[0]["genre"],
+         f"{genres.iloc[0]['pct_of_catalog']:.0f}% of the catalogue")
 
     st.write("")
-    st.subheader("Yang perlu diketahui")
+    st.subheader("What you need to know")
 
     corr = load_table("correlation_metrics").set_index("pair")
     richness = load_table("text_richness_vs_rating")
@@ -233,40 +282,40 @@ def page_overview() -> None:
 
     insight_cols = st.columns(3)
     card(
-        insight_cols[0], "Panjang ≠ disukai", f"r = {r_len}",
-        "Korelasi jumlah bab dengan rating justru negatif tipis. Menambah bab "
-        "tidak membeli penerimaan pembaca.",
+        insight_cols[0], "Length ≠ acclaim", f"r = {r_len}",
+        "Chapter count correlates slightly negatively with rating. Adding more "
+        "chapters does not buy reader approval.",
     )
     card(
-        insight_cols[1], "Genre paling dihargai", top_genre["genre"],
-        f"Rata-rata {top_genre['avg_weighted_rating']:.2f} dari {int(top_genre['n_novels'])} judul. "
-        f"Terpanjang: {longest['genre']} (~{longest['avg_chapters']:,.0f} bab).",
+        insight_cols[1], "Best-rated genre", top_genre["genre"],
+        f"Averages {top_genre['avg_weighted_rating']:.2f} across {int(top_genre['n_novels'])} titles. "
+        f"Longest: {longest['genre']} (~{longest['avg_chapters']:,.0f} chapters).",
     )
     card(
-        insight_cols[2], "Sinopsis yang kaya menang", f"+{gain:.2f} poin",
-        "Judul dengan sinopsis 300+ kata dinilai lebih tinggi dibanding yang "
-        "di bawah 50 kata.",
+        insight_cols[2], "Rich synopses win", f"+{gain:.2f} points",
+        "Titles with 300+ word synopses score higher than those under "
+        "50 words.",
     )
 
     st.write("")
     left, right = st.columns([3, 2], gap="large")
 
     with left:
-        st.subheader("Genre terpopuler")
+        st.subheader("Most common genres")
         subset = genres.nlargest(10, "n_novels").sort_values("n_novels")
         fig = px.bar(
             subset, x="n_novels", y="genre", orientation="h",
             color="avg_weighted_rating", color_continuous_scale=SCALE,
-            labels={"n_novels": "Jumlah judul", "genre": "", "avg_weighted_rating": "Rating"},
+            labels={"n_novels": "Number of titles", "genre": "", "avg_weighted_rating": "Rating"},
         )
         fig.update_coloraxes(colorbar_title_text="Rating")
         st.plotly_chart(style_fig(fig, 380), use_container_width=True)
 
     with right:
-        st.subheader("Paling dihargai pembaca")
+        st.subheader("Highest reader ratings")
         top = (
             reliable.nlargest(8, "weighted_rating")[["title", "weighted_rating", "rating_votes"]]
-            .rename(columns={"title": "Judul", "weighted_rating": "Rating", "rating_votes": "Suara"})
+            .rename(columns={"title": "Title", "weighted_rating": "Rating", "rating_votes": "Votes"})
         )
         st.dataframe(
             top, hide_index=True, use_container_width=True, height=380,
@@ -277,53 +326,54 @@ def page_overview() -> None:
 
 
 # ---------------------------------------------------------------------------
-# HALAMAN — Analitik Katalog
+# PAGE — Catalogue Analytics
 # ---------------------------------------------------------------------------
 def page_analytics() -> None:
     hero(
-        "Analitik katalog",
-        "Struktur pasar novel terjemahan: komposisi genre, hubungan panjang cerita "
-        "dengan penerimaan pembaca, dan kosakata yang mendominasi ceritanya.",
+        "Catalogue analytics",
+        "The structure of the translated-novel market: genre mix, how story length "
+        "relates to reader reception, and the vocabulary that dominates the stories.",
+        eyebrow="Business intelligence",
     )
 
     viz = load_table("viz_novels")
     tab_genre, tab_length, tab_text, tab_market = st.tabs(
-        ["Genre", "Panjang & Rating", "Bahasa Cerita", "Peta Pasar"]
+        ["Genres", "Length & Rating", "Story Language", "Market Map"]
     )
 
-    # --- Genre ---------------------------------------------------------
+    # --- Genres ---------------------------------------------------------
     with tab_genre:
         genres = load_table("genre_frequency")
-        top_n = st.slider("Genre ditampilkan", 5, min(30, len(genres)), 15)
+        top_n = st.slider("Genres shown", 5, min(30, len(genres)), 15)
         subset = genres.nlargest(top_n, "n_novels").sort_values("n_novels")
 
         fig = px.bar(
             subset, x="n_novels", y="genre", orientation="h",
             color="avg_weighted_rating", color_continuous_scale=SCALE,
-            labels={"n_novels": "Jumlah judul", "genre": "", "avg_weighted_rating": "Rating"},
+            labels={"n_novels": "Number of titles", "genre": "", "avg_weighted_rating": "Rating"},
             hover_data={"pct_of_catalog": ":.1f", "avg_chapters": ":.0f"},
         )
         fig.update_coloraxes(colorbar_title_text="Rating")
         st.plotly_chart(style_fig(fig, max(360, 26 * top_n)), use_container_width=True)
         st.markdown(
-            '<div class="nl-note">Panjang batang = jumlah judul, warna = rating rata-rata. '
-            "Genre terbanyak belum tentu genre yang paling disukai — bandingkan keduanya.</div>",
+            '<div class="nl-note">Bar length = number of titles, colour = average rating. '
+            "The most common genre is not necessarily the best-liked one — compare both.</div>",
             unsafe_allow_html=True,
         )
 
         st.write("")
         col1, col2 = st.columns(2, gap="large")
         with col1:
-            st.markdown("**Kombinasi genre tersering**")
+            st.markdown("**Most frequent genre combinations**")
             combos = load_table("genre_combinations").head(12)
             st.dataframe(
                 combos[["genre_combo", "n_novels", "avg_weighted_rating"]].rename(
-                    columns={"genre_combo": "Kombinasi", "n_novels": "Judul",
+                    columns={"genre_combo": "Combination", "n_novels": "Titles",
                              "avg_weighted_rating": "Rating"}),
                 hide_index=True, use_container_width=True, height=430,
             )
         with col2:
-            st.markdown("**Sebaran rating per genre**")
+            st.markdown("**Rating spread by genre**")
             top_genres = viz["primary_genre"].value_counts().head(8).index.tolist()
             box_df = viz[viz["primary_genre"].isin(top_genres) & viz["weighted_rating"].notna()]
             fig = px.box(
@@ -334,13 +384,13 @@ def page_analytics() -> None:
             fig.update_layout(showlegend=False)
             st.plotly_chart(style_fig(fig, 430), use_container_width=True)
 
-    # --- Panjang & rating ----------------------------------------------
+    # --- Length & rating ----------------------------------------------
     with tab_length:
         col_a, col_b = st.columns([3, 2])
         available = sorted(viz["primary_genre"].dropna().unique().tolist())
         default = load_table("genre_frequency").nlargest(5, "n_novels")["genre"].tolist()
-        picked = col_a.multiselect("Genre", available, default=[g for g in default if g in available])
-        only_reliable = col_b.checkbox("Hanya judul dengan penilaian mapan", value=True)
+        picked = col_a.multiselect("Genres", available, default=[g for g in default if g in available])
+        only_reliable = col_b.checkbox("Only titles with an established score", value=True)
 
         scatter = viz.dropna(subset=["chapter_count", "weighted_rating"])
         if picked:
@@ -349,20 +399,20 @@ def page_analytics() -> None:
             scatter = scatter[scatter["is_rated_reliable"] == True]  # noqa: E712
 
         if scatter.empty:
-            st.info("Tidak ada judul yang cocok dengan filter ini.")
+            st.info("No titles match these filters.")
         else:
             fig = px.scatter(
                 scatter, x="chapter_count", y="weighted_rating", color="primary_genre",
                 size="rating_votes", size_max=26, opacity=0.62, log_x=True,
                 color_discrete_sequence=SEQUENCE, hover_name="title",
                 hover_data={"rating_score": True, "rating_votes": True, "type_origin": True},
-                labels={"chapter_count": "Jumlah bab (skala log)",
+                labels={"chapter_count": "Chapter count (log scale)",
                         "weighted_rating": "Rating", "primary_genre": ""},
             )
             buckets = load_table("length_vs_rating")
             fig.add_scatter(
                 x=buckets["avg_chapters"], y=buckets["avg_weighted_rating"],
-                mode="lines+markers", name="Rata-rata per kelompok panjang",
+                mode="lines+markers", name="Average per length bucket",
                 line=dict(color="#FFB454", width=3, dash="dash"),
             )
             st.plotly_chart(style_fig(fig, 500), use_container_width=True)
@@ -370,90 +420,111 @@ def page_analytics() -> None:
             corr = load_table("correlation_metrics")
             r = corr.loc[corr["pair"] == "chapter_count ~ weighted_rating", "pearson_r"].iloc[0]
             st.markdown(
-                f'<div class="nl-note">Garis oranye adalah rata-rata rating per kelompok panjang. '
-                f"Korelasinya r = {r} — praktis datar lalu menurun di atas 1.000 bab: cerita yang "
-                "terlalu panjang cenderung kehilangan pembaca yang puas.</div>",
+                f'<div class="nl-note">The orange line is the average rating per length bucket. '
+                f"The correlation is r = {r} — essentially flat, then falling past 1,000 chapters: "
+                "stories that run too long tend to lose satisfied readers.</div>",
                 unsafe_allow_html=True,
             )
 
         st.write("")
-        st.markdown("**Rating menurut kelompok panjang**")
+        st.markdown("**Rating by length bucket**")
         buckets = load_table("length_vs_rating")
         fig = px.bar(
             buckets, x="length_bucket", y="avg_weighted_rating", color="n_novels",
             color_continuous_scale=SCALE,
-            labels={"length_bucket": "", "avg_weighted_rating": "Rating", "n_novels": "Judul"},
+            labels={"length_bucket": "", "avg_weighted_rating": "Rating", "n_novels": "Titles"},
         )
         fig.update_yaxes(range=[3.3, 3.65])
-        fig.update_coloraxes(colorbar_title_text="Judul")
+        fig.update_coloraxes(colorbar_title_text="Titles")
         st.plotly_chart(style_fig(fig, 340), use_container_width=True)
 
-    # --- Bahasa cerita --------------------------------------------------
+        st.write("")
+        st.markdown("**Rating by release pace**")
+        pace = load_table("release_pace_vs_rating")
+        fig = px.bar(
+            pace, x="release_pace", y="avg_weighted_rating", color="n_novels",
+            color_continuous_scale=SCALE,
+            labels={"release_pace": "", "avg_weighted_rating": "Rating", "n_novels": "Titles"},
+        )
+        fig.update_layout(xaxis_tickangle=-12)
+        fig.update_coloraxes(colorbar_title_text="Titles")
+        st.plotly_chart(style_fig(fig, 340), use_container_width=True)
+        pace_r = load_table("correlation_metrics")
+        pace_r = pace_r.loc[pace_r["pair"] == "log_days_per_chapter ~ weighted_rating", "pearson_r"]
+        st.markdown(
+            '<div class="nl-note">Release pace is parsed from the catalogue&apos;s '
+            '"Every N Day(s)" field, which had never been used before. Its correlation '
+            f"with rating (r = {pace_r.iloc[0] if len(pace_r) else '—'}) is about as strong as "
+            "the chapter-count one — slow-updating titles score slightly lower.</div>",
+            unsafe_allow_html=True,
+        )
+
+    # --- Story language --------------------------------------------------
     with tab_text:
         tokens = load_table("top_tokens")
-        st.markdown("**Kosakata yang mendominasi sinopsis**")
+        st.markdown("**Vocabulary that dominates the synopses**")
         col_wc, col_list = st.columns([3, 1], gap="large")
         with col_wc:
             st.image(render_wordcloud(tokens), use_column_width=True)
         with col_list:
             st.dataframe(
                 tokens.head(14)[["token", "n_novels"]].rename(
-                    columns={"token": "Kata", "n_novels": "Judul"}),
+                    columns={"token": "Word", "n_novels": "Titles"}),
                 hide_index=True, use_container_width=True, height=420,
             )
         st.markdown(
-            '<div class="nl-note">Diambil dari sinopsis asli (bukan tag katalog), '
-            "setelah pembuangan stopword.</div>",
+            '<div class="nl-note">Taken from the original synopses (not the catalogue tags), '
+            "after stopword removal.</div>",
             unsafe_allow_html=True,
         )
 
         st.write("")
         col1, col2 = st.columns(2, gap="large")
         with col1:
-            st.markdown("**Panjang sinopsis vs rating**")
+            st.markdown("**Synopsis length vs rating**")
             richness = load_table("text_richness_vs_rating")
             fig = px.bar(
                 richness, x="text_richness", y="avg_weighted_rating", color="n_novels",
                 color_continuous_scale=SCALE,
-                labels={"text_richness": "", "avg_weighted_rating": "Rating", "n_novels": "Judul"},
+                labels={"text_richness": "", "avg_weighted_rating": "Rating", "n_novels": "Titles"},
             )
             fig.update_yaxes(range=[3.35, 3.8])
             fig.update_layout(xaxis_tickangle=-18)
-            fig.update_coloraxes(colorbar_title_text="Judul")
+            fig.update_coloraxes(colorbar_title_text="Titles")
             st.plotly_chart(style_fig(fig, 380), use_container_width=True)
         with col2:
-            st.markdown("**Elemen cerita dengan rating terbaik**")
+            st.markdown("**Best-rated story elements**")
             tags = load_table("best_rated_tags").head(14).sort_values("avg_weighted_rating")
             fig = px.bar(
                 tags, x="avg_weighted_rating", y="tag", orientation="h", color="n_novels",
                 color_continuous_scale=SCALE,
-                labels={"avg_weighted_rating": "Rating", "tag": "", "n_novels": "Judul"},
+                labels={"avg_weighted_rating": "Rating", "tag": "", "n_novels": "Titles"},
             )
             fig.update_xaxes(range=[3.4, 4.0])
-            fig.update_coloraxes(colorbar_title_text="Judul")
+            fig.update_coloraxes(colorbar_title_text="Titles")
             st.plotly_chart(style_fig(fig, 380), use_container_width=True)
 
-    # --- Peta pasar -----------------------------------------------------
+    # --- Market map -----------------------------------------------------
     with tab_market:
-        st.markdown("**Rating rata-rata per genre × negara asal**")
+        st.markdown("**Average rating by genre × country of origin**")
         matrix = load_table("genre_origin_matrix")
         pivot = matrix.pivot(index="genre", columns="type_origin", values="avg_weighted_rating")
         pivot = pivot.loc[pivot.mean(axis=1).sort_values(ascending=False).index]
         fig = px.imshow(
             pivot, color_continuous_scale=SCALE, aspect="auto", text_auto=".2f",
-            labels=dict(x="Negara asal", y="", color="Rating"),
+            labels=dict(x="Country of origin", y="", color="Rating"),
         )
         st.plotly_chart(style_fig(fig, max(380, 30 * len(pivot))), use_container_width=True)
         st.markdown(
-            '<div class="nl-note">Sel kosong = kombinasi dengan kurang dari 25 judul, '
-            "sengaja tidak dihitung agar rata-rata tidak dibentuk segelintir judul.</div>",
+            '<div class="nl-note">Empty cells = combinations with fewer than 25 titles, '
+            "deliberately left uncomputed so no average rests on a handful of titles.</div>",
             unsafe_allow_html=True,
         )
 
         st.write("")
         col1, col2 = st.columns(2, gap="large")
         with col1:
-            st.markdown("**Tren per dekade**")
+            st.markdown("**Trend by decade**")
             decade = load_table("decade_trend")
             fig = px.line(
                 decade, x="decade", y="avg_weighted_rating", markers=True,
@@ -462,18 +533,18 @@ def page_analytics() -> None:
             fig.update_traces(line=dict(color=BRAND, width=3), marker=dict(size=10, color=ACCENT))
             st.plotly_chart(style_fig(fig, 340), use_container_width=True)
         with col2:
-            st.markdown("**Judul terpanjang di katalog**")
+            st.markdown("**Longest titles in the catalogue**")
             outliers = load_table("stat_outlier_novels").head(10)
             st.dataframe(
                 outliers[["title", "chapter_count", "rating_score"]].rename(
-                    columns={"title": "Judul", "chapter_count": "Bab", "rating_score": "Rating"}),
+                    columns={"title": "Title", "chapter_count": "Chapters", "rating_score": "Rating"}),
                 hide_index=True, use_container_width=True, height=340,
             )
 
 
 @st.cache_data(ttl=900, show_spinner=False)
 def render_wordcloud(tokens: pd.DataFrame) -> bytes:
-    """Render word cloud dengan latar transparan agar menyatu dengan tema."""
+    """Render the word cloud on a transparent ground so it blends with the theme."""
     from wordcloud import WordCloud
 
     cloud = WordCloud(
@@ -487,37 +558,38 @@ def render_wordcloud(tokens: pd.DataFrame) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# HALAMAN — AI Studio
+# PAGE — AI Studio
 # ---------------------------------------------------------------------------
-CONTOH_SINOPSIS = (
-    "Setelah dikhianati sekutunya dan tewas di puncak menara, seorang pendekar "
-    "terbangun kembali di tubuh dirinya sepuluh tahun lebih muda. Kali ini ia "
-    "berniat menguasai teknik pedang terlarang sebelum musuh lamanya bangkit."
+SAMPLE_SYNOPSIS = (
+    "After being betrayed by their allies and dying at the top of the tower, a "
+    "swordsman wakes up in their own body ten years younger. This time they intend "
+    "to master the forbidden sword techniques before their old enemy rises again."
 )
-CONTOH_TAG = "Time Travel, Weak to Strong, Cultivation, Male Protagonist, Revenge, Sword Wielder"
+SAMPLE_TAGS = "Time Travel, Weak to Strong, Cultivation, Male Protagonist, Revenge, Sword Wielder"
 
 
 def page_studio() -> None:
     hero(
         "AI Studio",
-        "Empat asisten yang bekerja dari isi cerita: mencari judul serupa, "
-        "melabeli genre, memperkirakan penerimaan pembaca, dan mengenali arketipe naratif.",
+        "Four assistants that work from story content: finding similar titles, "
+        "tagging genres, estimating reader reception, and recognising narrative archetypes.",
+        eyebrow="Predictive models",
     )
 
     if not artifacts_available():
-        st.info("Fitur AI sedang disiapkan. Coba lagi setelah proses pelatihan model selesai.")
+        st.info("AI features are still being prepared. Try again once model training has finished.")
         return
 
     try:
         registry = get_registry()
     except ModelNotTrainedError as exc:
-        st.info("Fitur AI belum tersedia.")
-        with st.expander("Detail teknis"):
+        st.info("AI features are not available yet.")
+        with st.expander("Technical details"):
             st.code(str(exc))
         return
 
     tab_rec, tab_genre, tab_rating, tab_arch = st.tabs(
-        ["Rekomendasi", "Pelabelan Genre", "Perkiraan Rating", "Arketipe Cerita"]
+        ["Recommendations", "Genre Tagging", "Rating Estimate", "Story Archetypes"]
     )
 
     with tab_rec:
@@ -531,21 +603,21 @@ def page_studio() -> None:
 
 
 def _studio_recommend(registry) -> None:
-    st.markdown("Temukan judul yang secara isi paling dekat dengan yang Anda sukai.")
-    mode = st.radio("Cari dari", ["Judul di katalog", "Deskripsi bebas"], horizontal=True)
-    k = st.slider("Jumlah rekomendasi", 3, 12, 6)
+    st.markdown("Find the titles whose content sits closest to one you already like.")
+    mode = st.radio("Search by", ["Catalogue title", "Free-text description"], horizontal=True)
+    k = st.slider("How many recommendations", 3, 12, 6)
 
     try:
-        if mode == "Judul di katalog":
+        if mode == "Catalogue title":
             titles = registry.catalog.sort_values("rating_votes", ascending=False)["title"].tolist()
-            choice = st.selectbox("Judul acuan", titles)
+            choice = st.selectbox("Reference title", titles)
             series_id = int(registry.catalog.loc[registry.catalog["title"] == choice, "series_id"].iloc[0])
             results = registry.recommend_by_series(series_id, k=k)
         else:
-            text = st.text_area("Cerita seperti apa yang Anda cari?", CONTOH_SINOPSIS, height=110)
+            text = st.text_area("What kind of story are you looking for?", SAMPLE_SYNOPSIS, height=110)
             results = registry.recommend_by_text(text, k=k)
     except (ValueError, KeyError):
-        st.warning("Masukan belum cukup untuk dicarikan padanan. Tambahkan detail cerita.")
+        st.warning("Not enough input to find a match. Add more story detail.")
         return
 
     st.write("")
@@ -555,72 +627,79 @@ def _studio_recommend(registry) -> None:
 
 def _studio_genre(registry) -> None:
     st.markdown(
-        "Tempel sinopsis dan tag sebuah novel, lalu pilih model yang ingin dipakai. "
-        "Setiap model punya cara berbeda dalam menimbang kata."
+        "Paste a novel's synopsis and tags, then pick the model to use. "
+        "Each model weighs words differently."
     )
 
     names = registry.genre_model_names
     info = {name: registry.genre_model_info(name) for name in names}
 
     choice = st.radio(
-        "Model prediksi",
+        "Prediction model",
         names,
         horizontal=True,
         format_func=lambda n: f"{info[n].get('label', n)} · F1 {info[n].get('f1_macro', 0):.2f}",
     )
     selected = info[choice]
+    reference = selected.get("reference")
     st.markdown(
-        f'<div class="nl-note"><b>{selected.get("family", "")}</b> — {selected.get("description", "")}</div>',
+        f'<div class="nl-note"><b>{selected.get("family", "")}</b> — {selected.get("description", "")}'
+        + (f'<br><span style="opacity:.75">Architecture follows {reference}.</span>' if reference else "")
+        + "</div>",
         unsafe_allow_html=True,
     )
 
     st.write("")
     col1, col2 = st.columns([3, 2], gap="large")
     with col1:
-        synopsis = st.text_area("Sinopsis", CONTOH_SINOPSIS, height=150)
-        tags = st.text_input("Tag (opsional, pisahkan dengan koma)", CONTOH_TAG)
+        synopsis = st.text_area("Synopsis", SAMPLE_SYNOPSIS, height=150)
+        tags = st.text_input("Tags (optional, comma-separated)", SAMPLE_TAGS)
     with col2:
-        origin = st.selectbox("Negara asal", ["CN", "KR", "JP", "EN", "Other"])
-        novel_type = st.selectbox("Tipe", ["Web Novel", "Light Novel", "Published Novel"])
+        origin = st.selectbox("Country of origin", ["CN", "KR", "JP", "EN", "Other"])
+        novel_type = st.selectbox("Format", ["Web Novel", "Light Novel", "Published Novel"])
         sensitivity = st.slider(
-            "Ketelitian", 0.6, 1.6, 1.0, 0.05,
-            help="Di bawah 1 menampilkan lebih banyak genre; di atas 1 hanya yang paling yakin.",
+            "Strictness", 0.6, 1.6, 1.0, 0.05,
+            help="Below 1 surfaces more genres; above 1 keeps only the most confident ones.",
         )
 
-    if st.button("Prediksi genre", type="primary"):
+    if st.button("Predict genres", type="primary"):
         try:
-            result = registry.predict_genres(
-                synopsis, tags=tags, model=choice, top_k=12,
-                type_origin=origin, novel_type=novel_type, sensitivity=sensitivity,
-            )
+            # The hybrid model loads its sentence encoder on first use — about
+            # five seconds, once per session. Every later call is ~50 ms, so the
+            # spinner only ever shows up on that first prediction.
+            with st.spinner("Running the model…"):
+                result = registry.predict_genres(
+                    synopsis, tags=tags, model=choice, top_k=12,
+                    type_origin=origin, novel_type=novel_type, sensitivity=sensitivity,
+                )
         except ValueError:
-            st.warning("Teks belum cukup untuk dianalisis. Tambahkan sinopsis atau tag.")
+            st.warning("Not enough text to analyse. Add a synopsis or some tags.")
             return
 
-        predicted = result[result["diprediksi"]]["genre"].tolist()
+        predicted = result[result["predicted"]]["genre"].tolist()
         if predicted:
-            st.markdown("**Genre terprediksi**")
+            st.markdown("**Predicted genres**")
             st.markdown(chips(predicted, active=True), unsafe_allow_html=True)
         else:
-            st.info("Tidak ada genre yang cukup meyakinkan. Turunkan ketelitian atau tambah detail.")
+            st.info("No genre is confident enough. Lower the strictness or add more detail.")
 
         st.write("")
         plot = result.sort_values("probability")
         fig = px.bar(
             plot, x="probability", y="genre", orientation="h",
-            color="diprediksi", color_discrete_map={True: ACCENT, False: "rgba(255,255,255,.18)"},
-            labels={"probability": "Keyakinan model", "genre": "", "diprediksi": ""},
+            color="predicted", color_discrete_map={True: ACCENT, False: "rgba(255,255,255,.18)"},
+            labels={"probability": "Model confidence", "genre": "", "predicted": ""},
         )
         fig.add_scatter(
             x=plot["threshold"], y=plot["genre"], mode="markers",
             marker=dict(symbol="line-ns", size=16, line=dict(color="#FFB454", width=2)),
-            name="Ambang genre",
+            name="Genre threshold",
         )
         st.plotly_chart(style_fig(fig, 440), use_container_width=True)
         st.markdown(
-            '<div class="nl-note">Garis oranye adalah ambang khusus tiap genre. '
-            "Genre langka punya ambang lebih rendah, sehingga tetap bisa terdeteksi "
-            "tanpa membanjiri hasil dengan genre umum.</div>",
+            '<div class="nl-note">The orange marks are each genre&apos;s own threshold. '
+            "Rare genres get a lower one, so they can still be detected without "
+            "flooding the results with common genres.</div>",
             unsafe_allow_html=True,
         )
 
@@ -628,43 +707,48 @@ def _studio_genre(registry) -> None:
 def _studio_rating(registry) -> None:
     head_d = registry.metrics["head_d_rating_estimator"]
     if not head_d.get("trained"):
-        st.info("Perkiraan rating belum tersedia.")
+        st.info("Rating estimation is not available yet.")
         return
 
     st.markdown(
-        "Perkirakan bagaimana pembaca akan menilai sebuah cerita — berguna sebelum "
-        "judul baru punya rating sungguhan."
+        "Estimate how readers will score a story — useful before a new title has "
+        "any real ratings."
     )
 
     col1, col2 = st.columns([3, 2], gap="large")
     with col1:
-        text = st.text_area("Sinopsis atau tag", CONTOH_TAG, height=130, key="rating_text")
+        text = st.text_area("Synopsis or tags", SAMPLE_TAGS, height=130, key="rating_text")
     with col2:
-        chapters = st.number_input("Rencana jumlah bab", 1, 12000, 300, 10)
-        year = st.number_input("Tahun rilis", 1990, 2030, 2024)
-        origin = st.selectbox("Negara asal", ["CN", "KR", "JP", "EN", "Other"], key="rating_origin")
-        completed = st.checkbox("Sudah tamat")
+        chapters = st.number_input("Planned chapter count", 1, 12000, 300, 10)
+        year = st.number_input("Release year", 1990, 2030, 2024)
+        origin = st.selectbox("Country of origin", ["CN", "KR", "JP", "EN", "Other"], key="rating_origin")
+        pace_days = st.number_input(
+            "Days between chapters", 0.5, 365.0, 7.0, 0.5,
+            help="How often a new chapter lands. Slow-updating titles score slightly lower.",
+        )
+        completed = st.checkbox("Already completed")
 
-    if st.button("Perkirakan rating", type="primary"):
+    if st.button("Estimate rating", type="primary"):
         try:
             predicted = registry.estimate_rating(
                 text, chapter_count=float(chapters), year=int(year),
                 is_completed=completed, type_origin=origin,
+                days_per_chapter=float(pace_days),
             )
         except (ValueError, ModelNotTrainedError):
-            st.warning("Masukan belum cukup untuk diperkirakan.")
+            st.warning("Not enough input to produce an estimate.")
             return
 
         average = registry.catalog["rating_score"].mean()
         cols = st.columns(3)
-        card(cols[0], "Perkiraan rating", f"{predicted:.2f}", "skala 1–5")
-        card(cols[1], "Dibanding katalog", f"{predicted - average:+.2f}", f"rata-rata {average:.2f}")
-        card(cols[2], "Rentang kesalahan", f"±{head_d['mae']:.2f}", "berdasarkan uji tertahan")
+        card(cols[0], "Estimated rating", f"{predicted:.2f}", "on a 1–5 scale")
+        card(cols[1], "Vs catalogue", f"{predicted - average:+.2f}", f"average {average:.2f}")
+        card(cols[2], "Error margin", f"±{head_d['mae']:.2f}", "measured on the held-out test set")
 
         st.markdown(
-            '<div class="nl-note">Perkiraan ini hanya membaca isi cerita, bukan kualitas '
-            "penulisan atau promosi. Konten menjelaskan sebagian kecil variasi rating, jadi "
-            "perlakukan angkanya sebagai indikasi arah — bukan vonis.</div>",
+            '<div class="nl-note">This estimate reads story content only — not writing quality '
+            "or marketing. Content explains a small share of rating variance, so treat the "
+            "number as a direction, not a verdict.</div>",
             unsafe_allow_html=True,
         )
 
@@ -674,67 +758,68 @@ def _studio_archetype(registry) -> None:
     profiles = pd.DataFrame(head_c["profiles"])
 
     st.markdown(
-        f"Katalog terbagi menjadi {head_c['best_k']} arketipe naratif. "
-        "Tempel sebuah cerita untuk melihat ia masuk keluarga mana."
+        f"The catalogue splits into {head_c['best_k']} narrative archetypes. "
+        "Paste a story to see which family it belongs to."
     )
-    text = st.text_area("Sinopsis atau tag", CONTOH_TAG, height=110, key="arch_text")
+    text = st.text_area("Synopsis or tags", SAMPLE_TAGS, height=110, key="arch_text")
 
-    if st.button("Kenali arketipe", type="primary"):
+    if st.button("Identify archetype", type="primary"):
         try:
             assignment = registry.assign_cluster(text)
         except ValueError:
-            st.warning("Teks belum cukup untuk dikenali.")
+            st.warning("Not enough text to identify an archetype.")
             return
 
         profile = assignment["profile"]
         with st.container(border=True):
-            st.markdown(f"### Arketipe #{assignment['cluster_id']}")
+            st.markdown(f"### Archetype #{assignment['cluster_id']}")
             st.markdown(chips(profile.get("top_terms", [])[:8], active=True), unsafe_allow_html=True)
             cols = st.columns(3)
-            card(cols[0], "Judul sekeluarga", f"{profile.get('size', 0):,}")
-            card(cols[1], "Rating rata-rata", f"{profile.get('avg_weighted_rating', 0):.2f}")
-            card(cols[2], "Panjang rata-rata", f"{profile.get('avg_chapters', 0):,.0f} bab")
+            card(cols[0], "Titles in this family", f"{profile.get('size', 0):,}")
+            card(cols[1], "Average rating", f"{profile.get('avg_weighted_rating', 0):.2f}")
+            card(cols[2], "Average length", f"{profile.get('avg_chapters', 0):,.0f} chapters")
             st.write("")
-            st.caption("Contoh judul: " + " · ".join(profile.get("example_titles", [])[:4]))
+            st.caption("Example titles: " + " · ".join(profile.get("example_titles", [])[:4]))
 
     st.write("")
-    st.markdown("**Seluruh arketipe**")
+    st.markdown("**All archetypes**")
     overview = profiles.assign(
-        istilah=profiles["top_terms"].apply(lambda t: ", ".join(t[:5])),
+        terms=profiles["top_terms"].apply(lambda t: ", ".join(t[:5])),
         genre=profiles["top_genres"].apply(lambda g: ", ".join(list(g.keys())[:3])),
-    )[["cluster_id", "size", "avg_weighted_rating", "avg_chapters", "istilah", "genre"]]
+    )[["cluster_id", "size", "avg_weighted_rating", "avg_chapters", "terms", "genre"]]
     st.dataframe(
         overview.rename(columns={
-            "cluster_id": "#", "size": "Judul", "avg_weighted_rating": "Rating",
-            "avg_chapters": "Bab", "istilah": "Ciri khas", "genre": "Genre dominan"}),
+            "cluster_id": "#", "size": "Titles", "avg_weighted_rating": "Rating",
+            "avg_chapters": "Chapters", "terms": "Signature terms", "genre": "Dominant genres"}),
         hide_index=True, use_container_width=True,
     )
 
 
 # ---------------------------------------------------------------------------
-# HALAMAN — Metodologi
+# PAGE — Methodology
 # ---------------------------------------------------------------------------
 def page_method() -> None:
     hero(
-        "Metodologi & keterbatasan",
-        "Bagaimana angka di aplikasi ini dihitung, seberapa akurat modelnya, "
-        "dan di titik mana hasilnya tidak boleh dipercaya mentah-mentah.",
+        "Methodology & limitations",
+        "How the numbers in this app are computed, how accurate the models are, "
+        "and where the output should not be taken at face value.",
+        eyebrow="Transparency",
     )
 
-    st.subheader("Dari mana datanya")
+    st.subheader("Where the data comes from")
     st.markdown(
         """
-Katalog berisi **4.461 judul** web novel terjemahan beserta metadata, rating
-pembaca, dan sinopsis. Sebelum dipakai, data melewati pembersihan:
+The catalogue holds **4,461 translated web novel titles** with their metadata,
+reader ratings, and synopses. Before use, the data goes through cleaning:
 
-- Nilai kosong yang disamarkan sebagai angka `0` atau teks `"Unknown"`
-  dikembalikan menjadi kosong sungguhan — tanpa ini rata-rata jumlah bab
-  meleset sekitar 20%.
-- Rating ditampilkan dalam bentuk **rating tertimbang**: judul dengan 2 suara
-  tidak diperlakukan sama dengan judul dengan 500 suara. Peringkat apa pun di
-  aplikasi ini hanya melibatkan judul dengan minimal 10 suara.
-- Sinopsis digabungkan dari sumber terpisah lewat pencocokan tautan, mencakup
-  **98,45%** katalog.
+- Missing values disguised as the number `0` or the text `"Unknown"` are
+  restored to genuinely empty — without this the average chapter count is off
+  by roughly 20%.
+- Ratings are shown as a **weighted rating**: a title with 2 votes is not
+  treated like one with 500. Every ranking in this app uses only titles with at
+  least 10 votes.
+- Synopses are joined in from a separate source by URL matching, covering
+  **98.45%** of the catalogue.
         """
     )
 
@@ -745,61 +830,84 @@ pembaca, dan sinopsis. Sebelum dipakai, data melewati pembersihan:
     head_a, head_b = metrics["head_a_genre_tagger"], metrics["head_b_recommender"]
     head_c, head_d = metrics["head_c_clustering"], metrics["head_d_rating_estimator"]
 
-    st.subheader("Performa model pelabelan genre")
+    st.subheader("Genre tagging model performance")
     st.markdown(
-        "Ketiga model dilatih dan diuji pada pembagian data yang sama "
-        f"({head_a['n_train']:,} judul untuk pengembangan · {head_a['n_test']:,} untuk pengujian), "
-        "sehingga perbandingannya adil. Hyperparameter dan ambang keputusan tiap genre "
-        "dipilih memakai validasi silang di dalam set pengembangan — set uji baru "
-        "disentuh sekali, di akhir, agar angka di bawah ini tidak dilebih-lebihkan."
+        "Every model is trained and tested on the same split "
+        f"({head_a['n_train']:,} titles for development · {head_a['n_test']:,} for testing), "
+        "so the comparison is fair. Hyperparameters and each genre's decision threshold "
+        "are chosen by cross-validation inside the development set — the test set is "
+        "touched once, at the very end, so the numbers below are not inflated."
     )
 
     rows = []
     for name, entry in head_a["models"].items():
         rows.append({
             "Model": entry.get("label", name),
-            "Pendekatan": entry.get("family", ""),
-            "F1 makro": entry["f1_macro"],
-            "F1 mikro": entry["f1_micro"],
-            "F1 per judul": entry["f1_samples"],
-            "Tanpa penyetelan ambang": entry["f1_macro_fixed_threshold"],
+            "Approach": entry.get("family", ""),
+            "Macro F1": entry["f1_macro"],
+            "Micro F1": entry["f1_micro"],
+            "P@3": entry.get("precision_at_3"),
+            "Hamming loss": entry.get("hamming_loss"),
+            "Macro F1 without threshold tuning": entry["f1_macro_fixed_threshold"],
         })
-    table = pd.DataFrame(rows).sort_values("F1 makro", ascending=False)
+    table = pd.DataFrame(rows).sort_values("Macro F1", ascending=False)
     st.dataframe(
         table, hide_index=True, use_container_width=True,
         column_config={
-            "F1 makro": st.column_config.ProgressColumn("F1 makro", min_value=0, max_value=1, format="%.3f"),
-            "F1 mikro": st.column_config.ProgressColumn("F1 mikro", min_value=0, max_value=1, format="%.3f"),
+            "Macro F1": st.column_config.ProgressColumn("Macro F1", min_value=0, max_value=1, format="%.3f"),
+            "Micro F1": st.column_config.ProgressColumn("Micro F1", min_value=0, max_value=1, format="%.3f"),
+            "P@3": st.column_config.NumberColumn("P@3", format="%.3f"),
+            "Hamming loss": st.column_config.NumberColumn("Hamming loss", format="%.4f"),
         },
     )
     st.markdown(
-        '<div class="nl-note">Kolom terakhir memperlihatkan skor model yang sama bila memakai '
-        "ambang seragam 0,5. Selisihnya adalah kontribusi penyetelan ambang per genre.</div>",
+        """
+<div class="nl-note">
+<b>Macro F1</b> weights every genre equally, so it drops sharply when rare genres are
+ignored — this is the model selection metric. <b>Micro F1</b> is dominated by common
+genres. <b>P@3</b> measures how accurate the top three guesses are without depending on a
+threshold at all, which is closest to what users actually see. <b>Hamming loss</b> is the
+share of binary decisions that are wrong (lower is better). The last column shows the same
+model scored with a uniform 0.5 threshold — the gap is the contribution of per-genre
+threshold tuning.
+</div>
+        """,
         unsafe_allow_html=True,
     )
 
-    st.write("")
-    st.subheader("Fitur lain")
-    cols = st.columns(3)
-    card(cols[0], "Rekomendasi", f"{head_b['genre_overlap_at_k']:.0%}",
-         f"dari {head_b['k']} saran berbagi genre dengan judul acuan")
-    card(cols[1], "Arketipe", f"{head_c['best_k']} kelompok",
-         "jumlah kelompok dipilih otomatis lewat silhouette score")
-    card(cols[2], "Perkiraan rating", f"±{head_d['mae']:.2f}",
-         f"lebih baik {head_d['improvement_over_baseline_pct']:.0f}% dari tebakan rata-rata")
-
-    st.write("")
-    st.subheader("Keterbatasan yang perlu diingat")
     st.markdown(
         """
-- Model membaca **deskripsi**, bukan naskah. Novel dengan sinopsis buruk akan
-  dinilai buruk meski isinya bagus.
-- Rekomendasi murni berbasis kemiripan konten; dua judul bertema sama dianggap
-  mirip walau mutu penulisannya berbeda jauh.
-- Katalog didominasi novel Tiongkok (55%), sehingga akurasi untuk judul
-  berbahasa Inggris atau Jepang cenderung lebih rendah.
-- Rating berasal dari satu komunitas pembaca terjemahan, bukan populasi umum.
-- Arketipe adalah kelompok yang saling bersinggungan, bukan sekat tegas.
+**Architecture references.** The two feature-based models (TF-IDF + linear) follow the
+baselines common in genre-classification-from-synopsis research. The sequence model
+replicates a BiLSTM with self-attention (Ertugrul & Karagoz, 2018; Zhou et al., 2016),
+with multi-label handling via weighted per-label *binary cross-entropy*
+(Liu et al., SIGIR 2017). Per-genre probability threshold tuning follows Hoang (2018).
+        """
+    )
+
+    st.write("")
+    st.subheader("Other features")
+    cols = st.columns(3)
+    card(cols[0], "Recommendations", f"{head_b['genre_overlap_at_k']:.0%}",
+         f"of {head_b['k']} suggestions share a genre with the reference title")
+    card(cols[1], "Archetypes", f"{head_c['best_k']} clusters",
+         "cluster count chosen automatically by silhouette score")
+    card(cols[2], "Rating estimate", f"±{head_d['mae']:.2f}",
+         f"{head_d['improvement_over_baseline_pct']:.0f}% better than guessing the average")
+
+    st.write("")
+    st.subheader("Limitations worth remembering")
+    st.markdown(
+        """
+- The models read the **description**, not the manuscript. A novel with a poor
+  synopsis will be judged poorly even if the story itself is good.
+- Recommendations rest purely on content similarity; two titles on the same theme
+  count as similar even when their writing quality differs sharply.
+- The catalogue is dominated by Chinese novels (55%), so accuracy on English or
+  Japanese titles tends to be lower.
+- Ratings come from a single translated-fiction reader community, not the general
+  population.
+- Archetypes are overlapping groups, not hard partitions.
         """
     )
 
@@ -808,34 +916,46 @@ pembaca, dan sinopsis. Sebelum dipakai, data melewati pembersihan:
 # Router
 # ---------------------------------------------------------------------------
 PAGES = {
-    "Ringkasan": page_overview,
-    "Analitik Katalog": page_analytics,
+    "Overview": page_overview,
+    "Catalogue Analytics": page_analytics,
     "AI Studio": page_studio,
-    "Metodologi": page_method,
+    "Methodology": page_method,
 }
 
 
 def main() -> None:
     with st.sidebar:
-        st.markdown("## 📖 NovelLens")
-        st.caption("Intelijen katalog web novel")
+        st.markdown(
+            '<div style="display:flex;align-items:center;gap:.6rem;margin:.2rem 0 .1rem">'
+            '<div style="width:34px;height:34px;border-radius:10px;display:grid;place-items:center;'
+            'background:linear-gradient(135deg,#7C5CFF,#22D3A7);font-size:1.05rem">📖</div>'
+            '<div><div style="font-size:1.06rem;font-weight:680;letter-spacing:-.02em">NovelLens</div>'
+            f'<div style="font-size:.72rem;color:{MUTED}">Novel catalogue intelligence</div></div></div>',
+            unsafe_allow_html=True,
+        )
         st.write("")
-        choice = st.radio("Navigasi", list(PAGES), label_visibility="collapsed")
-        st.write("")
-        st.caption("Data: 4.461 judul · NovelUpdates")
+        choice = st.radio("Navigation", list(PAGES), label_visibility="collapsed")
+        st.divider()
+        st.markdown(
+            f'<div style="font-size:.75rem;color:{MUTED};line-height:1.6">'
+            "<b>4,461</b> titles · NovelUpdates<br>"
+            "Bayesian weighted rating<br>"
+            "Models selected by cross-validation</div>",
+            unsafe_allow_html=True,
+        )
 
     online, detail = backend_online()
     if not online:
-        st.error("Layanan data sedang tidak dapat dijangkau. Silakan coba beberapa saat lagi.")
-        with st.expander("Detail teknis"):
+        st.error("The data service is unreachable right now. Please try again shortly.")
+        with st.expander("Technical details"):
             st.code(detail)
         st.stop()
 
     try:
         PAGES[choice]()
     except DataUnavailable as exc:
-        st.warning("Data untuk halaman ini belum tersedia.")
-        with st.expander("Detail teknis"):
+        st.warning("The data for this page is not available yet.")
+        with st.expander("Technical details"):
             st.code(str(exc))
 
 

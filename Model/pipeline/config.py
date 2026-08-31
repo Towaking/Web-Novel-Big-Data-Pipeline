@@ -1,0 +1,91 @@
+"""
+Konfigurasi pipeline pemodelan
+==============================
+Seluruh angka yang menentukan perilaku model dikumpulkan di satu berkas, agar
+eksperimen cukup mengubah satu tempat dan hasilnya dapat direproduksi.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+
+ARTIFACT_DIR = Path("/opt/project/Model/artifacts")
+RANDOM_STATE = 42
+
+#: Genre dengan contoh lebih sedikit dari ini dibuang: klasifikator yang hanya
+#: melihat <50 contoh positif selalu memprediksi "bukan" dan mengaburkan macro-F1.
+MIN_GENRE_SUPPORT = 50
+
+#: Porsi data uji. Set uji hanya disentuh sekali, di akhir.
+TEST_SIZE = 0.2
+
+#: Jumlah fold untuk probabilitas out-of-fold (pemilihan hyperparameter + ambang).
+CV_FOLDS = 3
+
+
+@dataclass(frozen=True)
+class FeatureConfig:
+    """
+    Bobot dan parameter tiap blok fitur teks.
+
+    Ketiga blok teks sengaja tumpang tindih; ablasi menunjukkan ketiganya
+    menyumbang (tag saja 0,507 · sinopsis saja 0,455 · gabungan 0,547 makro-F1).
+    """
+
+    corpus_min_df: int = 3
+    corpus_max_features: int = 40_000
+    synopsis_min_df: int = 3
+    synopsis_max_features: int = 40_000
+    tags_min_df: int = 2
+    tags_max_features: int = 10_000
+    ngram_range: tuple = (1, 2)
+    max_df: float = 0.85
+    weights: dict = field(
+        default_factory=lambda: {
+            "corpus": 1.0,
+            "synopsis": 1.0,
+            "tags": 1.6,   # tag = label kurasi manusia, presisi tertinggi
+            "meta": 0.6,
+            # Bobot blok embedding pralatih. Dipilih lewat sapuan OOF
+            # (0,5 / 1 / 2 / 3 / 5); lihat model card bagian Head A.
+            "embedding": 1.0,
+        }
+    )
+    #: Seleksi fitur khusus per label (LIFT, Zhang & Wu 2015). 0 = nonaktif.
+    label_specific_k: int = 0
+    #: Aktifkan blok embedding kalimat pralatih (arsitektur `hybrid`).
+    #: Default False supaya `logreg`/`svm` tetap persis seperti sebelumnya.
+    use_embeddings: bool = False
+
+
+@dataclass(frozen=True)
+class AugmentationConfig:
+    """
+    Parameter augmentasi data.
+
+    Dua teknik dari literatur, keduanya menyasar label langka:
+      * `random_deletion` — EDA (Wei & Zou, EMNLP 2019). Menghapus token acak
+        pada dokumen berlabel langka, meniru novel dengan deskripsi lebih miskin.
+      * `mlsmote` — MLSMOTE (Charte et al., 2015). Membuat instance sintetis di
+        ruang fitur dari tetangga terdekat instance berlabel minoritas.
+    """
+
+    random_deletion: bool = False
+    deletion_rate: float = 0.15
+    deletion_copies: int = 1
+    mlsmote: bool = False
+    mlsmote_neighbors: int = 5
+    #: Label dianggap minoritas bila frekuensinya di bawah rata-rata (IRLbl > 1).
+    minority_quantile: float = 0.5
+
+
+@dataclass(frozen=True)
+class ThresholdConfig:
+    """Rentang pencarian ambang keputusan per label."""
+
+    #: Di bawah 0,05 model memuntahkan hampir semua genre (presisi runtuh);
+    #: di atas 0,80 genre langka tidak pernah lolos.
+    low: float = 0.05
+    high: float = 0.80
+    step: float = 0.025

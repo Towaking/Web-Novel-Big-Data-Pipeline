@@ -136,7 +136,38 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------
-  # 6. Presentation Layer (Fase 5)
+  # 6. Notebook — eksplorasi interaktif PySpark
+  #    Driver Spark tersendiri (hostname `notebook`) supaya job dari
+  #    notebook tidak bentrok dengan job batch di container `pipeline`.
+  # ---------------------------------------------------------
+  notebook:
+    <<: *spark-common
+    container_name: novel-notebook
+    hostname: notebook
+    environment:
+      SPARK_DRIVER_HOST: notebook
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+      spark-master:
+        condition: service_healthy
+    # Bentuk daftar (exec form): token kosong berarti akses tanpa autentikasi —
+    # dapat diterima karena port hanya dipetakan ke localhost mesin ini.
+    command:
+      - jupyter
+      - lab
+      - --ip=0.0.0.0
+      - --port=8888
+      - --no-browser
+      - --ServerApp.root_dir=/opt/project
+      - --ServerApp.token=${JUPYTER_TOKEN:-}
+      - --ServerApp.password=
+    ports:
+      - "${JUPYTER_PORT:-8888}:8888"
+    restart: unless-stopped
+
+  # ---------------------------------------------------------
+  # 7. Presentation Layer (Fase 5)
   # ---------------------------------------------------------
   streamlit:
     <<: *spark-common

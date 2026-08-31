@@ -1,0 +1,211 @@
+"""
+Entry point pelatihan model
+===========================
+Skrip mandiri untuk melatih ulang model tanpa menjalankan seluruh pipeline.
+Berguna saat yang berubah hanya arsitektur atau hyperparameter, sedangkan
+data bersih di lake sudah benar.
+
+Skrip ini TIDAK menggandakan logika training — ia memanggil modul Fase 4 yang
+sama (`src/phases/phase4_model.py`, `genre_models.py`, `dl_models.py`).
+Menyalin kode training ke sini akan melahirkan dua kebenaran yang perlahan
+menyimpang; yang ada di sini hanyalah lapisan antarmuka baris perintah.
+
+Contoh pemakaian
+----------------
+    # Latih ulang semuanya (4 model genre + rekomendasi + klaster + rating)
+    docker compose exec pipeline python Model/train.py
+
+    # Hanya model genre, semua arsitektur
+    docker compose exec pipeline python Model/train.py --only genre
+
+    # Hanya arsitektur tertentu (yang lain dipertahankan dari artefak lama)
+    docker compose exec pipeline python Model/train.py --models bilstm
+
+    # Percobaan cepat: kurangi epoch model deep learning
+    docker compose exec pipeline python Model/train.py --models bilstm --epochs 5
+
+    # Latih tanpa mengunggah artefak ke MinIO
+    docker compose exec pipeline python Model/train.py --no-upload
+
+Daftar arsitektur yang tersedia:
+    logreg   Logistic Regression (TF-IDF)
+    svm      Linear SVM terkalibrasi (TF-IDF)
+    hybrid   TF-IDF + embedding kalimat pralatih (BGE) - terbaik
+    bilstm   BiLSTM + Attention (deep learning)
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+# Skrip ini berada di dalam Model/, jadi akar proyek perlu ditambahkan ke
+# jalur impor supaya `python Model/train.py` bekerja tanpa PYTHONPATH khusus.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import joblib  # noqa: E402
+
+from src.common.logging_utils import get_logger, log_section  # noqa: E402
+from src.phases import genre_models, phase4_model  # noqa: E402
+
+logger = get_logger("model.train")
+ARTIFACT_DIR = phase4_model.ARTIFACT_DIR
+
+
+def train_genre_only(model_names: list[str] | None, epochs: int | None, upload: bool) -> dict:
+    """
+    Latih ulang hanya Head A (pelabelan genre).
+
+    Model yang tidak diminta tetap dipertahankan dari artefak sebelumnya,
+    sehingga melatih ulang satu arsitektur tidak menghapus yang lain dari
+    dashboard.
+    """
+    log_section(logger, "melatih ulang model genre")
+
+    requested = model_names or list(genre_models.MODEL_CATALOG)
+    unknown = [m for m in requested if m not in genre_models.MODEL_CATALOG]
+    if unknown:
+        raise SystemExit(
+            f"Arsitektur tidak dikenal: {', '.join(unknown)}. "
+            f"Pilihan: {', '.join(genre_models.MODEL_CATALOG)}"
+        )
+
+    if epochs is not None:
+        # Berlaku hanya untuk model deep learning; model linear tidak punya epoch.
+        for name in requested:
+            # `hybrid` ikut dikecualikan bersama model linear: blok embedding
+            # memakai encoder beku, jadi tidak ada epoch yang bisa disetel.
+            if name in genre_models.PARAM_GRID and name not in ("logreg", "svm", "hybrid"):
+                for config in genre_models.PARAM_GRID[name]:
+                    config["epochs"] = epochs
+        logger.info("Epoch model deep learning dipaksa menjadi %d.", epochs)
+
+    pdf, stopwords = phase4_model.load_training_frame()
+
+    artifacts, mlb, metrics = phase4_model.train_genre_tagger(pdf, names=requested)
+
+    # Gabungkan dengan artefak lama agar arsitektur lain tidak hilang.
+    previous_path = ARTIFACT_DIR / "genre_models.joblib"
+    if previous_path.is_file() and set(requested) != set(genre_models.MODEL_CATALOG):
+        previous = joblib.load(previous_path)
+        merged = {**previous, **artifacts}
+        logger.info(
+            "Artefak digabung: %s dilatih ulang, %s dipertahankan.",
+            ", ".join(requested),
+            ", ".join(k for k in previous if k not in requested) or "(tidak ada)",
+        )
+    else:
+        merged = artifacts
+
+    metrics_path = ARTIFACT_DIR / "metrics.json"
+    all_metrics = json.loads(metrics_path.read_text(encoding="utf-8")) if metrics_path.is_file() else {}
+    head_a = all_metrics.get("head_a_genre_tagger", {})
+    head_a.setdefault("models", {})
+    head_a["models"].update(metrics["models"])
+    head_a.update({k: v for k, v in metrics.items() if k != "models"})
+
+    # Buang metrik arsitektur yang artefaknya sudah tidak ada. Tanpa ini,
+    # menghapus sebuah arsitektur dari katalog menyisakan barisnya di tabel
+    # perbandingan dashboard — model yang tidak bisa dipilih tetapi seolah ada.
+    stale = [name for name in head_a["models"] if name not in merged]
+    for name in stale:
+        head_a["models"].pop(name)
+    if stale:
+        logger.info("Metrik arsitektur usang dibuang: %s", ", ".join(stale))
+
+    head_a["best_model"] = max(head_a["models"], key=lambda k: head_a["models"][k]["f1_macro"])
+    all_metrics["head_a_genre_tagger"] = head_a
+    all_metrics.setdefault("stopwords", stopwords)
+
+    ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+    phase4_model.save_artifacts(genre_models=merged, genre_binarizer=mlb)
+    metrics_path.write_text(json.dumps(all_metrics, indent=2), encoding="utf-8")
+    logger.info("Metrik diperbarui: %s", metrics_path)
+
+    if upload:
+        phase4_model._upload_artifacts_to_lake()
+
+    _print_comparison(head_a["models"], head_a["best_model"])
+    return all_metrics
+
+
+def _print_comparison(models: dict, best: str) -> None:
+    """Tabel perbandingan antar arsitektur, dicetak ke log."""
+    log_section(logger, "perbandingan model genre (set uji)")
+    header = f"{'model':<22} {'F1 makro':>9} {'F1 mikro':>9} {'P@3':>7} {'Hamming':>8}"
+    logger.info(header)
+    logger.info("-" * len(header))
+    for name, entry in sorted(models.items(), key=lambda kv: -kv[1]["f1_macro"]):
+        mark = " *" if name == best else "  "
+        logger.info(
+            "%-22s %9.4f %9.4f %7.4f %8.4f%s",
+            entry.get("label", name),
+            entry["f1_macro"],
+            entry["f1_micro"],
+            entry.get("precision_at_3", float("nan")),
+            entry.get("hamming_loss", float("nan")),
+            mark,
+        )
+    logger.info("(*) model default yang dipakai dashboard bila pengguna tidak memilih")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Latih ulang model NovelLens",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    parser.add_argument(
+        "--only",
+        choices=["all", "genre"],
+        default="all",
+        help="'genre' hanya melatih Head A; 'all' melatih seluruh head (default).",
+    )
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        metavar="NAMA",
+        help="Arsitektur genre yang dilatih ulang (default: semua). "
+        "Menyiratkan --only genre.",
+    )
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        help="Paksa jumlah epoch model deep learning (untuk percobaan cepat).",
+    )
+    parser.add_argument(
+        "--no-upload",
+        action="store_true",
+        help="Jangan menyalin artefak ke MinIO setelah pelatihan.",
+    )
+    args = parser.parse_args()
+
+    try:
+        if args.models or args.only == "genre":
+            train_genre_only(args.models, args.epochs, upload=not args.no_upload)
+        else:
+            if args.epochs is not None:
+                for name in ("bilstm",):
+                    for config in genre_models.PARAM_GRID.get(name, []):
+                        config["epochs"] = args.epochs
+            metrics = phase4_model.run()
+            _print_comparison(
+                metrics["head_a_genre_tagger"]["models"],
+                metrics["head_a_genre_tagger"]["best_model"],
+            )
+    except KeyboardInterrupt:
+        logger.warning("Pelatihan dihentikan pengguna. Artefak lama tidak diubah.")
+        return 130
+    except Exception as exc:  # noqa: BLE001
+        logger.error("PELATIHAN GAGAL: %s", exc, exc_info=True)
+        return 1
+
+    logger.info("Selesai. Restart container Streamlit agar artefak baru terbaca:")
+    logger.info("    docker compose restart streamlit")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -25,7 +25,7 @@ from src.common.logging_utils import get_logger, log_section
 logger = get_logger("verify_app")
 
 APP_PATH = "/opt/project/app/streamlit_app.py"
-PAGES = ["Ringkasan", "Analitik Katalog", "AI Studio", "Metodologi"]
+PAGES = ["Overview", "Catalogue Analytics", "AI Studio", "Methodology"]
 TIMEOUT_SECONDS = 180
 
 

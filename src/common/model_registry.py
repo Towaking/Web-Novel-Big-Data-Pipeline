@@ -127,14 +127,23 @@ class ModelRegistry:
             raise ValueError("Teks tidak menyisakan token bermakna setelah pembersihan.")
 
         # Bentuk masukan harus sama persis dengan saat training
-        # (lihat genre_models.FEATURE_COLUMNS), termasuk urutan kolomnya.
+        # (lihat genre_models.FEATURE_COLUMNS): korpus gabungan, sinopsis saja,
+        # dan tag saja masing-masing punya blok fiturnya sendiri.
         frame = pd.DataFrame(
             [
                 {
                     "corpus_clean": corpus,
+                    # Bila pengguna hanya menempel tag tanpa sinopsis, blok ini
+                    # kosong — sama seperti novel tanpa sinopsis saat training.
+                    "synopsis_clean": to_corpus(text, self.stopwords),
                     "tags_clean": (tags or text).lower().replace(",", " "),
                     "type_origin": type_origin,
                     "type": novel_type,
+                    # Kalimat utuh untuk arsitektur hybrid: encoder pralatih
+                    # dilatih pada prosa normal, jadi teks di sini TIDAK boleh
+                    # melewati stemming/pembuangan stopword seperti blok TF-IDF.
+                    # Model tanpa blok embedding mengabaikan kolom ini.
+                    "text_natural": f"{text.strip()} Tags: {tags}".strip(),
                 }
             ]
         )
@@ -153,12 +162,12 @@ class ModelRegistry:
                 "threshold": thresholds,
             }
         )
-        result["diprediksi"] = result["probability"] >= result["threshold"]
+        result["predicted"] = result["probability"] >= result["threshold"]
         # Diurutkan berdasarkan seberapa jauh melewati ambangnya sendiri, bukan
         # probabilitas mentah: genre langka dengan ambang rendah tetap terlihat.
         result["margin"] = result["probability"] - result["threshold"]
         return (
-            result.sort_values(["diprediksi", "margin"], ascending=[False, False])
+            result.sort_values(["predicted", "margin"], ascending=[False, False])
             .head(top_k)
             .reset_index(drop=True)
         )
@@ -195,6 +204,18 @@ class ModelRegistry:
         return {"cluster_id": cluster_id, "profile": profile}
 
     # -- HEAD D ------------------------------------------------------------
+    def _median_days_per_chapter(self) -> float:
+        """Median kecepatan rilis katalog; 30 hari bila kolomnya belum ada.
+
+        Cadangan 30 hari menjaga kompatibilitas dengan artefak lama yang
+        dilatih sebelum fitur ini ada — nilainya tidak dipakai model tersebut,
+        tetapi mencegah `KeyError` saat katalog lama dimuat.
+        """
+        if "days_per_chapter" not in self.catalog.columns:
+            return 30.0
+        median = pd.to_numeric(self.catalog["days_per_chapter"], errors="coerce").median()
+        return float(median) if pd.notna(median) else 30.0
+
     def estimate_rating(
         self,
         text: str,
@@ -203,6 +224,7 @@ class ModelRegistry:
         is_completed: bool = False,
         type_origin: str = "CN",
         novel_type: str = "Web Novel",
+        days_per_chapter: float | None = None,
     ) -> float:
         """
         Estimasi rating berbasis konten.
@@ -225,6 +247,13 @@ class ModelRegistry:
             "token_count": float(len(tokens)),
             "year": float(year if year else catalog_median_year),
             "is_completed": float(bool(is_completed)),
+            # Bila pengguna tidak menyebut kecepatan rilis, dipakai median
+            # katalog — bukan 0. Nol berarti "bab baru terbit tiap saat", nilai
+            # ekstrem yang tidak pernah ada di data latih dan akan menggeser
+            # prediksi ke arah yang menyesatkan.
+            "log_days_per_chapter": float(
+                np.log1p(days_per_chapter if days_per_chapter else self._median_days_per_chapter())
+            ),
             f"origin_{type_origin}": 1.0,
             f"type_{novel_type}": 1.0,
         }

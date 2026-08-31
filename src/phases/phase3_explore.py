@@ -316,9 +316,37 @@ def analytic_3_bivariate(spark: SparkSession) -> None:
                ROUND(CORR(chapter_count, rating_votes), 4), COUNT(*)
         FROM novels
         WHERE is_rated_reliable AND chapter_count IS NOT NULL
+
+        -- Kecepatan rilis, diurai dari `release_frequency` di Fase 2. Kolom itu
+        -- sebelumnya hanya lewat sebagai teks; ternyata 100% dapat diurai dan
+        -- korelasinya dengan rating sekuat korelasi jumlah bab.
+        -- Di-log karena sebarannya sangat miring (median 37 hari, maks 20.610).
+        UNION ALL
+        SELECT 'log_days_per_chapter ~ weighted_rating',
+               ROUND(CORR(LN(days_per_chapter), weighted_rating), 4), COUNT(*)
+        FROM novels
+        WHERE is_rated_reliable AND days_per_chapter IS NOT NULL AND days_per_chapter > 0
         """
     )
     save(correlations, "correlation_metrics")
+
+    # Kecepatan rilis per kelompok — memperlihatkan bentuk hubungannya, yang
+    # tidak terlihat dari satu angka korelasi saja.
+    release_vs_rating = spark.sql(
+        """
+        SELECT release_pace,
+               COUNT(*)                                          AS n_novels,
+               ROUND(AVG(weighted_rating), 4)                    AS avg_weighted_rating,
+               ROUND(PERCENTILE_APPROX(weighted_rating, 0.5), 4) AS median_weighted_rating,
+               ROUND(AVG(days_per_chapter), 1)                   AS avg_days_per_chapter,
+               ROUND(AVG(chapter_count), 1)                      AS avg_chapters
+        FROM novels
+        WHERE release_pace IS NOT NULL AND is_rated_reliable
+        GROUP BY release_pace
+        ORDER BY release_pace
+        """
+    )
+    save(release_vs_rating, "release_pace_vs_rating")
 
     # Korelasi tunggal bisa menyembunyikan hubungan non-linear, jadi hubungan
     # yang sama juga dilihat per bucket panjang novel.
@@ -580,7 +608,8 @@ def export_viz_dataset(spark: SparkSession) -> None:
                chapter_count, length_bucket, is_completed,
                rating_score, rating_votes, weighted_rating, is_rated_reliable,
                reading_list_count, popularity_score, token_count,
-               synopsis_word_count, has_synopsis
+               synopsis_word_count, has_synopsis,
+               days_per_chapter, release_pace
         FROM novels
         """
     )

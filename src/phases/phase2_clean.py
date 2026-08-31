@@ -252,6 +252,32 @@ def normalize_sentinels(df: DataFrame) -> DataFrame:
             ),
         )
 
+    # (b0) Perbaiki jumlah bab yang terpotong pemisah ribuan.
+    #
+    #      `status_coo` menuliskan jumlah bab lengkap dengan koma
+    #      ("1,593 Chapters (Completed)"). Pada satu baris, kolom
+    #      `chapter_count` berisi 593 sementara status_coo menyebut 1.593 —
+    #      pola khas angka yang terpotong pada koma saat pengambilan data.
+    #      Diverifikasi pada 3.021 baris yang kedua sumbernya sama-sama terisi:
+    #      3.020 cocok persis, 1 tidak. Yang satu itu diperbaiki di sini karena
+    #      sumber kebenarannya masih ada di dalam baris yang sama.
+    chapters_in_status = F.regexp_extract(
+        F.regexp_replace(F.col("status_coo"), ",", ""), r"(\d+)\s*[Cc]hapters?", 1
+    ).cast("int")
+    out = out.withColumn(
+        "chapter_count",
+        F.when(
+            chapters_in_status.isNotNull()
+            & (F.col("chapter_count") > 0)
+            & (chapters_in_status > F.col("chapter_count"))
+            # Hanya bila digit ekornya sama — ciri pemotongan pada koma.
+            # Tanpa syarat ini, perbedaan wajar (status basi vs kolom terbaru)
+            # ikut tertimpa.
+            & (chapters_in_status % F.lit(1000) == F.col("chapter_count")),
+            chapters_in_status,
+        ).otherwise(F.col("chapter_count")),
+    )
+
     # (b) Sentinel numerik 0 -> NULL (0 bab / tahun 0 mustahil secara domain)
     out = out.withColumn(
         "chapter_count",
@@ -447,7 +473,27 @@ def add_weighted_rating(df: DataFrame, min_votes: int = MIN_VOTES_RELIABLE) -> t
 def add_derived_features(df: DataFrame) -> DataFrame:
     """Fitur turunan untuk analitik Fase 3 dan pemodelan Fase 4."""
     return (
-        df.withColumn("decade", (F.floor(F.col("year") / 10) * 10).cast("int"))
+        # Kecepatan rilis, diurai dari `release_frequency` ("Every 0.9 Day(s)").
+        #
+        # Kolom itu sebelumnya hanya lewat begitu saja sebagai teks, padahal
+        # 100% baris dapat diurai dan hasilnya berkorelasi dengan rating sekuat
+        # jumlah bab (r = -0,089 vs -0,088): novel yang bab barunya lama datang
+        # dinilai sedikit lebih rendah. Disimpan sebagai hari per bab, bukan
+        # bab per hari, supaya nilainya tidak meledak pada rilis harian.
+        df.withColumn(
+            "days_per_chapter",
+            F.regexp_extract(F.col("release_frequency"), r"([\d.]+)\s*[Dd]ay", 1).cast("double"),
+        )
+        .withColumn(
+            "release_pace",
+            F.when(F.col("days_per_chapter").isNull(), F.lit(None))
+            .when(F.col("days_per_chapter") <= 2, F.lit("1. Harian (<=2 hari)"))
+            .when(F.col("days_per_chapter") <= 7, F.lit("2. Mingguan (3-7 hari)"))
+            .when(F.col("days_per_chapter") <= 30, F.lit("3. Bulanan (8-30 hari)"))
+            .when(F.col("days_per_chapter") <= 180, F.lit("4. Lambat (1-6 bulan)"))
+            .otherwise(F.lit("5. Terhenti (>6 bulan)")),
+        )
+        .withColumn("decade", (F.floor(F.col("year") / 10) * 10).cast("int"))
         .withColumn(
             "length_bucket",
             F.when(F.col("chapter_count").isNull(), F.lit(None))

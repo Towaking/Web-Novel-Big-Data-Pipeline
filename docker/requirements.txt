@@ -33,3 +33,16 @@ python-dotenv==1.0.1
 # --- NLP preprocessing (stemming untuk TF-IDF) ---
 # SnowballStemmer bekerja penuh offline: tidak perlu nltk.download() apa pun.
 nltk==3.9.1
+
+# --- Notebook (akses interaktif ke PySpark) ---
+jupyterlab==4.2.5
+ipywidgets==8.1.5
+
+# --- Encoder kalimat pralatih (Head A arsitektur `hybrid`) ---
+# sentence-transformers memuat backbone BGE yang dipakai blok fitur padat.
+# Versinya dikunci karena API `SentenceTransformer.encode` berubah antar minor
+# release, dan artefak joblib menyimpan nama model — bukan bobotnya — sehingga
+# encoder harus dapat dimuat ulang dengan perilaku yang sama persis.
+transformers==4.44.2
+sentence-transformers==3.0.1
+huggingface-hub==0.24.6

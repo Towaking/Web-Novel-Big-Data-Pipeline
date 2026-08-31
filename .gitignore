@@ -65,3 +65,9 @@ Thumbs.db
 desktop.ini
 .vscode/
 .idea/
+
+# ---- Keluaran sementara skrip riset (scripts/research/) ----
+# Berkas ber-prefix "_" di Model/artifacts adalah hasil antara eksperimen
+# (cache embedding, probabilitas OOF, log pelatihan) — dapat dibuat ulang
+# dan tidak termasuk artefak model yang dipakai dashboard.
+Model/artifacts/_*

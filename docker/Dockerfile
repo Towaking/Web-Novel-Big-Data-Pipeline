@@ -68,7 +68,34 @@ ENV PATH="${SPARK_HOME}/bin:${SPARK_HOME}/sbin:${JAVA_HOME}/bin:${PATH}"
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install -r /tmp/requirements.txt
 
-# --- Layer 5: workspace ---
+# --- Layer 5: PyTorch (CPU-only) untuk model deep learning Fase 4 ---
+# Dipasang dari indeks CPU PyTorch: wheel-nya ~200 MB, sedangkan wheel default
+# di PyPI membawa dependensi CUDA ~2,5 GB yang sama sekali tidak terpakai di
+# lingkungan tanpa GPU ini. --retries dinaikkan karena unduhan besar di jaringan
+# tidak stabil adalah kegagalan build yang paling sering terjadi di proyek ini.
+RUN pip install --retries 10 --timeout 120 \
+        --index-url https://download.pytorch.org/whl/cpu \
+        torch==2.4.1
+
+# --- Layer 6: encoder kalimat pralatih (BGE) ---
+# Bobotnya di-bake ke dalam image dengan alasan yang sama seperti jar S3A di
+# atas: jalur inferensi tidak boleh bergantung pada koneksi ke Hugging Face.
+# Artefak joblib hanya menyimpan NAMA model, jadi tanpa langkah ini container
+# yang tanpa jaringan akan gagal memuat Head A arsitektur `hybrid`.
+#
+# HF_HOME ditaruh di luar $HOME supaya cache-nya dapat dibaca semua user
+# container (build berjalan sebagai root, runtime sebagai `spark`).
+# Unduhannya dibungkus retry: registry HF memutus koneksi di tengah berkas
+# jauh lebih sering daripada yang diduga, dan snapshot yang terpotong baru
+# ketahuan saat inferensi pertama.
+ENV HF_HOME=/opt/hf-cache \
+    SENTENCE_EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
+COPY fetch_encoder.py /tmp/fetch_encoder.py
+RUN mkdir -p ${HF_HOME} \
+    && python /tmp/fetch_encoder.py \
+    && chmod -R a+rX ${HF_HOME}
+
+# --- Layer 7: workspace ---
 WORKDIR /opt/project
 RUN useradd --create-home --uid 1000 spark \
     && mkdir -p /opt/project /home/spark/.ivy2 \
