@@ -25,21 +25,35 @@ from src.common.logging_utils import get_logger, log_section
 logger = get_logger("verify_app")
 
 APP_PATH = "/opt/project/app/streamlit_app.py"
-PAGES = ["Overview", "Catalogue Analytics", "AI Studio", "Methodology"]
+#: Nama tampilan -> fungsi halaman di streamlit_app.py.
+PAGES = {
+    "Overview": "page_overview",
+    "Title Lookup": "page_lookup",
+    "AI Studio": "page_studio",
+    "Catalogue Analytics": "page_analytics",
+    "Market Trends": "page_trends",
+    "Genre Explorer": "page_genre",
+    "Story Elements": "page_tags",
+    "Authors & Publishers": "page_creators",
+    "Data Warehouse": "page_warehouse",
+    "Relationship Graph": "page_graph",
+    "Dataset": "page_dataset",
+    "Lake Operations": "page_lake",
+    "Quality & Governance": "page_governance",
+    "Methodology": "page_method",
+}
 TIMEOUT_SECONDS = 180
 
 
 def check_page(page: str) -> bool:
     """Render satu halaman dan laporkan exception yang muncul."""
-    app = AppTest.from_file(APP_PATH, default_timeout=TIMEOUT_SECONDS)
+    # Router `st.navigation` tidak bisa dipindah halamannya dari AppTest pada
+    # Streamlit 1.39, jadi fungsi halamannya dipanggil langsung: seluruh kode
+    # modul (tema, loader, helper) tetap dieksekusi, hanya `main()` yang diganti.
+    with open(APP_PATH, encoding="utf-8") as handle:
+        source = handle.read().rsplit("\nmain()", 1)[0]
+    app = AppTest.from_string(f"{source}\n{PAGES[page]}()\n", default_timeout=TIMEOUT_SECONDS)
     app.run()
-
-    if app.exception:
-        logger.error("[%s] gagal saat inisialisasi: %s", page, app.exception[0].value)
-        return False
-
-    # Halaman dipilih lewat radio di sidebar.
-    app.sidebar.radio[0].set_value(page).run()
 
     if app.exception:
         for exc in app.exception:
