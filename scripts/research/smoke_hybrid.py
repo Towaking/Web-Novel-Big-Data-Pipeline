@@ -37,7 +37,7 @@ t0 = time.time()
 p = mdl.predict_proba_frame(model, frame.head(4))
 print("predict_proba 4 baris: %.2fs -> %s" % (time.time() - t0, p.shape))
 
-# --- artefak harus bertahan lewat pickle, dan TIDAK boleh membawa bobot encoder ---
+# artefak harus bertahan lewat pickle, dan TIDAK boleh membawa bobot encoder
 buf = io.BytesIO()
 joblib.dump({"pipeline": model, "thresholds": np.full(len(labels), 0.4)}, buf)
 size_mb = buf.tell() / 1e6
@@ -45,7 +45,7 @@ buf.seek(0)
 loaded = joblib.load(buf)["pipeline"]
 print("ukuran artefak: %.1f MB (bobot encoder TIDAK ikut ter-pickle)" % size_mb)
 
-# --- bentuk masukan persis seperti yang dikirim dashboard ---
+# bentuk masukan persis seperti yang dikirim dashboard
 infer = pd.DataFrame([{
     "corpus_clean": "sword cultivation revenge tower",
     "synopsis_clean": "sword cultivation revenge tower",

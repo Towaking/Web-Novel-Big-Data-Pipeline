@@ -13,9 +13,12 @@ Temuan profil data yang menentukan desain modul ini
     dinormalisasi lebih dulu menjadi NULL sebelum agregasi apa pun.
   * **Deduplikasi memakai `series_id`, bukan `title`.** Ada judul kembar milik
     dua seri berbeda; dedup by title membuang baris yang valid.
-  * **Rating mentah bias.** 5,56% novel belum pernah dinilai dan mayoritas
+  * **Rating mentah bias.** Banyak novel belum pernah dinilai dan mayoritas
     sisanya bersuara sangat sedikit, jadi rata-rata mentah didominasi novel
     bersuara 1-2. Karena itu dihitung *Bayesian weighted rating*.
+
+Sumbernya satu berkas, `novel_catalogue.csv` (39.670 baris), hasil
+`scripts/scraper/consolidate_catalogue.py`.
 
 Seluruh transformasi dikerjakan terdistribusi di DataFrame Spark; tidak ada
 `collect()` ke driver selain untuk statistik ringkas yang dicetak ke log.
@@ -47,7 +50,7 @@ from src.common.spark_session import spark_session
 
 logger = get_logger("phase2.clean")
 
-# --- Parameter pembersihan --------------------------------------------------
+# Parameter pembersihan
 
 #: Ambang suara minimum agar sebuah rating dianggap dapat dipercaya.
 MIN_VOTES_RELIABLE = 10
@@ -86,37 +89,27 @@ DOMAIN_STOPWORDS = (
     "and",
 )
 
-#: Skema eksplisit — inferSchema dihindari karena (a) butuh satu pass ekstra
-#: membaca seluruh file dan (b) tipe hasil inferensi bisa berubah bila sampel
-#: datanya berubah, sehingga pipeline jadi tidak deterministik.
-#: Skema dataset pendamping berisi sinopsis (`novel_dataset_scrapped.csv`).
-#: Kolom `title` dan `genres` di file ini sengaja TIDAK dipakai: 721 barisnya
-#: berbeda dari dataset utama, dan dataset utama-lah yang memuat rating serta
-#: metadata lain, sehingga ia yang dijadikan sumber kebenaran.
-SYNOPSIS_SCHEMA = StructType(
+#: Skema eksplisit `Dataset/novel_catalogue.csv` (lihat
+#: scripts/scraper/consolidate_catalogue.py). inferSchema dihindari: butuh satu
+#: pass ekstra atas 60 MB dan tipe hasilnya bisa berubah bila isi data berubah.
+#:
+#: `year` StringType: halaman detail kadang menulis rentang ("2024-2025",
+#: ~200 baris) yang akan jadi NULL diam-diam bila dibaca IntegerType.
+CATALOGUE_SCHEMA = StructType(
     [
-        StructField("title", StringType(), True),
-        StructField("summary", StringType(), True),
-        StructField("genres", StringType(), True),
-        StructField("url", StringType(), True),
-    ]
-)
-
-RAW_SCHEMA = StructType(
-    [
-        StructField("title", StringType(), True),
-        StructField("genres", StringType(), True),
-        StructField("url", StringType(), True),
         StructField("series_id", IntegerType(), True),
+        StructField("title", StringType(), True),
+        StructField("url", StringType(), True),
         StructField("type", StringType(), True),
         StructField("type_origin", StringType(), True),
+        StructField("genres", StringType(), True),
         StructField("tags", StringType(), True),
         StructField("language", StringType(), True),
         StructField("authors", StringType(), True),
         StructField("artists", StringType(), True),
         StructField("original_publisher", StringType(), True),
         StructField("english_publisher", StringType(), True),
-        StructField("year", IntegerType(), True),
+        StructField("year", StringType(), True),
         StructField("status_coo", StringType(), True),
         StructField("chapter_count", IntegerType(), True),
         StructField("is_completed", IntegerType(), True),
@@ -131,105 +124,70 @@ RAW_SCHEMA = StructType(
         StructField("reading_list_count", IntegerType(), True),
         StructField("reading_list_month_rank", IntegerType(), True),
         StructField("reading_list_all_rank", IntegerType(), True),
+        StructField("synopsis", StringType(), True),
     ]
 )
 
+#: Peringkat aktivitas mingguan/bulanan di atas plafon NovelUpdates (§6.5
+#: `Doc/data_contract.md`): nilai ini berarti "di luar 2000 besar", bukan
+#: peringkat sungguhan. Berlaku untuk seluruh katalog.
+ACTIVITY_RANK_CEILING = 2000
 
-# --- Langkah-langkah transformasi ------------------------------------------
+
+# Langkah-langkah transformasi
 
 
-def read_raw(spark: SparkSession) -> DataFrame:
-    """Baca CSV mentah dari landing zone MinIO dengan skema eksplisit."""
+def read_catalogue(spark: SparkSession) -> DataFrame:
+    """Baca katalog mentah dari raw zone dengan skema eksplisit; `year` diurai ke integer."""
     settings = get_settings()
     uri = settings.minio.s3a_uri(settings.minio.bucket_raw, settings.raw_object_key)
-    logger.info("Membaca data mentah dari %s", uri)
-
-    df = (
-        spark.read.option("header", "true")
-        .option("quote", '"')
-        .option("escape", '"')
-        # multiLine wajib: kolom `tags` dan `title` berisi teks berkutip yang
-        # dapat memuat newline; tanpa ini satu baris logis terpecah jadi banyak.
-        .option("multiLine", "true")
-        .option("mode", "PERMISSIVE")
-        .schema(RAW_SCHEMA)
-        .csv(uri)
-    )
-    return df
-
-
-def read_synopsis(spark: SparkSession) -> DataFrame:
-    """
-    Baca dataset sinopsis dan siapkan sebagai tabel dimensi yang siap di-join.
-
-    Dua masalah pada sumber ini yang harus diselesaikan SEBELUM join:
-
-      1. **538 baris URL duplikat.** Menggabungkannya langsung akan menggandakan
-         baris fakta (4.461 -> 4.999) dan diam-diam menggelembungkan setiap
-         hitungan agregat di Fase 3.
-      2. **37 sinopsis kosong.** Dinormalkan menjadi NULL agar konsisten dengan
-         penanganan sentinel di dataset utama.
-
-    Aturan dedup: pertahankan sinopsis terpanjang per URL. Pada snapshot ini
-    seluruh duplikat isinya identik, tetapi aturan "terpanjang menang" tetap
-    deterministik bila suatu saat salah satu salinan terpotong.
-    """
-    settings = get_settings()
-    uri = settings.minio.s3a_uri(settings.minio.bucket_raw, settings.raw_synopsis_key)
-    logger.info("Membaca dataset sinopsis dari %s", uri)
-
+    logger.info("Membaca katalog mentah dari %s", uri)
     raw = (
         spark.read.option("header", "true")
         .option("quote", '"')
         .option("escape", '"')
-        .option("multiLine", "true")  # sinopsis prosa memuat newline di dalam kutip
+        # multiLine wajib: judul, tag dan sinopsis berkutip dapat memuat newline.
+        .option("multiLine", "true")
         .option("mode", "PERMISSIVE")
-        .schema(SYNOPSIS_SCHEMA)
+        .schema(CATALOGUE_SCHEMA)
         .csv(uri)
     )
-
-    cleaned = raw.select(
-        F.trim(F.col("url")).alias("url"),
-        F.when(F.length(F.trim(F.col("summary"))) == 0, F.lit(None))
-        .otherwise(F.trim(F.col("summary")))
-        .alias("synopsis"),
-    ).filter(F.col("url").isNotNull())
-
-    window = Window.partitionBy("url").orderBy(F.length(F.col("synopsis")).desc_nulls_last())
-    deduped = (
-        cleaned.withColumn("_rank", F.row_number().over(window))
-        .filter(F.col("_rank") == 1)
-        .drop("_rank")
+    # Rentang tahun ("2024-2025") dipetakan ke tahun pertama; bilangan bulat
+    # polos di-cast apa adanya supaya batas <1000/>2030 di normalize_sentinels berlaku.
+    return raw.withColumn(
+        "year",
+        F.when(F.trim(F.col("year")).rlike(r"^-?\d+$"), F.trim(F.col("year")).cast(IntegerType()))
+        .otherwise(F.regexp_extract(F.col("year"), r"(\d{4})", 1).cast(IntegerType())),
     )
 
-    n_raw, n_dedup = raw.count(), deduped.count()
-    logger.info("Sinopsis: %s baris mentah -> %s URL unik (-%s duplikat).",
-                f"{n_raw:,}", f"{n_dedup:,}", f"{n_raw - n_dedup:,}")
-    return deduped
 
-
-def attach_synopsis(df: DataFrame, synopsis: DataFrame) -> DataFrame:
+def assign_tier(df: DataFrame) -> DataFrame:
     """
-    Gabungkan sinopsis ke tabel fakta lewat `url` (LEFT JOIN).
+    Tandai `metadata_tier` dan beri id sementara pada seri tanpa halaman detail.
 
-    LEFT, bukan INNER: novel tanpa pasangan sinopsis tetap harus ikut dalam
-    analitik rating/panjang bab — membuangnya akan membuat statistik katalog
-    tidak lagi mewakili katalog.
+    `full` = 27 kolom halaman detail; `listing` = hanya teks + genre (halaman
+    detailnya 404). Metrik dari halaman detail WAJIB memfilter tier 'full'.
+    Id sintetis NEGATIF (terurut url, jadi deterministik) supaya baris itu tidak
+    terbuang oleh dedup `series_id` dan mustahil bertabrakan dengan id asli.
     """
-    joined = df.join(F.broadcast(synopsis), on="url", how="left")
-    return (
-        joined.withColumn(
-            "synopsis_word_count",
-            F.when(F.col("synopsis").isNull(), F.lit(None)).otherwise(
-                F.size(F.split(F.trim(F.col("synopsis")), r"\s+"))
-            ),
-        )
-        # Sinopsis <10 kata (79 baris) terlalu pendek untuk dianggap deskripsi
-        # bermakna - ditandai agar analitik teks bisa mengecualikannya.
-        .withColumn(
-            "has_synopsis",
-            (F.col("synopsis").isNotNull() & (F.col("synopsis_word_count") >= 10)).cast("boolean"),
-        )
+    numbering = Window.orderBy(F.col("url").asc())
+    listing = (
+        df.filter(F.col("series_id").isNull())
+        .withColumn("series_id", (-F.row_number().over(numbering)).cast(IntegerType()))
+        .withColumn("metadata_tier", F.lit("listing"))
+    )
+    full = df.filter(F.col("series_id").isNotNull()).withColumn("metadata_tier", F.lit("full"))
+    return full.unionByName(listing)
+
+
+def add_synopsis_flags(df: DataFrame) -> DataFrame:
+    """Jumlah kata sinopsis; sinopsis <10 kata tidak dihitung sebagai deskripsi bermakna."""
+    return df.withColumn(
+        "synopsis_word_count",
+        F.when(F.col("synopsis").isNull(), F.lit(None)).otherwise(F.size(F.split(F.trim(F.col("synopsis")), r"\s+"))),
+    ).withColumn(
+        "has_synopsis",
+        (F.col("synopsis").isNotNull() & (F.col("synopsis_word_count") >= 10)).cast("boolean"),
     )
 
 
@@ -238,19 +196,24 @@ def normalize_sentinels(df: DataFrame) -> DataFrame:
     Ubah sentinel menjadi NULL sejati.
 
     Ini langkah paling menentukan di seluruh fase: tanpa normalisasi ini,
-    `avg(chapter_count)` ikut menghitung 902 novel bernilai 0 dan hasilnya
-    turun ~20% dari nilai sebenarnya.
+    `avg(chapter_count)` ikut menghitung novel bernilai 0 dan rata-rata
+    panjang katalog turun palsu.
     """
     out = df
 
-    # (a) Sentinel string "Unknown" (case-insensitive) -> NULL
-    for col in UNKNOWN_SENTINEL_COLS:
-        out = out.withColumn(
-            col,
-            F.when(F.lower(F.trim(F.col(col))) == "unknown", F.lit(None)).otherwise(
+    # (a) Sentinel string "Unknown" / "N/A" (case-insensitive) -> NULL.
+    #     "N/A" adalah sentinel halaman detail NovelUpdates (tanpanya "N/A" jadi
+    #     penulis dan penerbit teratas). Satu `withColumns` per tahap, bukan satu
+    #     `withColumn` per kolom, supaya rencana Spark tetap pendek.
+    out = out.withColumns(
+        {
+            col: F.when(F.lower(F.trim(F.col(col))).isin("unknown", "n/a"), F.lit(None)).otherwise(
                 F.trim(F.col(col))
-            ),
-        )
+            )
+            for col in UNKNOWN_SENTINEL_COLS
+            if col in out.columns
+        }
+    )
 
     # (b0) Perbaiki jumlah bab yang terpotong pemisah ribuan.
     #
@@ -278,36 +241,47 @@ def normalize_sentinels(df: DataFrame) -> DataFrame:
         ).otherwise(F.col("chapter_count")),
     )
 
-    # (b) Sentinel numerik 0 -> NULL (0 bab / tahun 0 mustahil secara domain)
-    out = out.withColumn(
-        "chapter_count",
-        F.when(F.col("chapter_count") <= 0, F.lit(None)).otherwise(F.col("chapter_count")),
-    )
-    out = out.withColumn(
-        "year",
-        F.when((F.col("year") <= 0) | (F.col("year") > 2030), F.lit(None)).otherwise(F.col("year")),
-    )
-
-    # (c) rating_score 0 dengan 0 suara = "belum dinilai", bukan "nilainya jelek".
-    #     Membiarkannya sebagai 0 akan menarik turun seluruh rata-rata genre.
-    out = out.withColumn(
-        "rating_score",
-        F.when(
+    # (b) Sentinel numerik 0 -> NULL (0 bab / tahun 0 mustahil secara domain).
+    #     Keempat aturan ini saling lepas (tidak ada yang membaca kolom yang
+    #     diubah aturan lain), jadi aman dievaluasi dalam satu proyeksi.
+    numeric = {
+        "chapter_count": F.when(F.col("chapter_count") <= 0, F.lit(None)).otherwise(F.col("chapter_count")),
+        # Batas bawah 1000, bukan 1900: tahun terpotong (15, 21, 202, 206) jelas
+        # rusak, tetapi "Painted Skin" (1740, Pu Songling) adalah karya klasik sah.
+        "year": F.when((F.col("year") < 1000) | (F.col("year") > 2030), F.lit(None)).otherwise(F.col("year")),
+        # (c) rating_score 0 dengan 0 suara = "belum dinilai", bukan "nilainya
+        #     jelek". Membiarkannya 0 akan menarik turun seluruh rata-rata genre.
+        "rating_score": F.when(
             (F.col("rating_score") <= 0) | (F.col("rating_votes").isNull()) | (F.col("rating_votes") <= 0),
             F.lit(None),
         ).otherwise(F.col("rating_score")),
+    }
+    # (b1) reading_list_count negatif (4 baris, terendah -162) mustahil secara
+    #      domain dan membuat log1p di popularity_score menjadi NaN.
+    if "reading_list_count" in out.columns:
+        numeric["reading_list_count"] = F.when(F.col("reading_list_count") < 0, F.lit(None)).otherwise(
+            F.col("reading_list_count")
+        )
+    out = out.withColumns(numeric)
+
+    # (b2) Plafon #2000 (§6.5): "di luar 2000 besar", bukan peringkat sungguhan.
+    out = out.withColumns(
+        {
+            col: F.when(F.col(col) == ACTIVITY_RANK_CEILING, F.lit(None)).otherwise(F.col(col))
+            for col in ("activity_week_rank", "activity_month_rank")
+        }
     )
 
     # (d) String kosong -> NULL agar konsisten dengan sentinel lain
-    for field in out.schema.fields:
-        if isinstance(field.dataType, StringType):
-            out = out.withColumn(
-                field.name,
-                F.when(F.length(F.trim(F.col(field.name))) == 0, F.lit(None)).otherwise(
-                    F.col(field.name)
-                ),
+    return out.withColumns(
+        {
+            field.name: F.when(F.length(F.trim(F.col(field.name))) == 0, F.lit(None)).otherwise(
+                F.col(field.name)
             )
-    return out
+            for field in out.schema.fields
+            if isinstance(field.dataType, StringType)
+        }
+    )
 
 
 def deduplicate(df: DataFrame) -> DataFrame:
@@ -444,7 +418,8 @@ def add_weighted_rating(df: DataFrame, min_votes: int = MIN_VOTES_RELIABLE) -> t
     mendekati rata-rata, sedangkan novel 4,4 dari 280 suara nyaris tak bergeser.
     """
     reliable = df.filter((F.col("rating_score").isNotNull()) & (F.col("rating_votes") >= min_votes))
-    global_mean = reliable.select(F.avg("rating_score")).first()[0]
+    stats = reliable.agg(F.avg("rating_score").alias("c"), F.count(F.lit(1)).alias("n")).first()
+    global_mean = stats["c"]
 
     if global_mean is None:  # tidak mungkin pada dataset ini, tapi jangan diam-diam gagal
         raise ValueError("Tidak ada baris dengan rating tepercaya - weighted rating tak terdefinisi.")
@@ -453,7 +428,7 @@ def add_weighted_rating(df: DataFrame, min_votes: int = MIN_VOTES_RELIABLE) -> t
         "Rata-rata global (C) pada populasi >= %d suara: %.4f (n=%s)",
         min_votes,
         global_mean,
-        f"{reliable.count():,}",
+        f"{stats['n']:,}",
     )
 
     v = F.col("rating_votes").cast("double")
@@ -507,16 +482,24 @@ def add_derived_features(df: DataFrame) -> DataFrame:
             "popularity_score",
             # Proksi popularitas: gabungan jumlah suara dan reading list,
             # di-log agar ekor ekstrem tidak mendominasi.
-            F.round(
-                F.log1p(F.coalesce(F.col("rating_votes"), F.lit(0)))
-                + F.log1p(F.coalesce(F.col("reading_list_count"), F.lit(0))),
-                4,
+            #
+            # Baris tier 'listing' dipaksa NULL, bukan 0. Tanpa guard ini
+            # `coalesce(..., 0)` memberi skor 0 pada ribuan novel yang sinyal
+            # popularitasnya sekadar BELUM diambil — tidak bisa dibedakan dari
+            # novel yang benar-benar tidak punya pembaca, dan setiap agregat
+            # popularitas ikut melorot tanpa jejak.
+            F.when(F.col("metadata_tier") != "full", F.lit(None)).otherwise(
+                F.round(
+                    F.log1p(F.coalesce(F.col("rating_votes"), F.lit(0)))
+                    + F.log1p(F.coalesce(F.col("reading_list_count"), F.lit(0))),
+                    4,
+                )
             ),
         )
     )
 
 
-# --- Orkestrasi fase --------------------------------------------------------
+# Orkestrasi fase
 
 
 def run() -> dict:
@@ -526,19 +509,20 @@ def run() -> dict:
     report: list[dict] = []
 
     with spark_session("phase2-clean") as spark:
-        raw = read_raw(spark).cache()
+        # CSV multiLine tidak bisa di-split (satu task per berkas); tanpa cache
+        # setiap aksi hilir mem-parse ulang 60 MB dari MinIO.
+        raw = read_catalogue(spark).cache()
         n_raw = raw.count()
         logger.info("Baris mentah terbaca: %s", f"{n_raw:,}")
-        report.append({"step": "1_raw_loaded", "rows": n_raw, "note": "CSV dari raw-data"})
+        report.append({"step": "1_raw_loaded", "rows": n_raw, "note": "novel_catalogue.csv dari raw-data"})
 
-        # --- Buang baris tanpa identitas (tidak bisa dipakai maupun ditelusuri)
-        identified = raw.filter(F.col("series_id").isNotNull() & F.col("title").isNotNull())
+        # Buang baris tanpa identitas (tidak bisa dipakai maupun ditelusuri)
+        identified = assign_tier(raw.filter(F.col("url").isNotNull() & F.col("title").isNotNull()))
         n_identified = identified.count()
         if n_identified < n_raw:
-            logger.warning("%s baris dibuang: series_id/title kosong.", f"{n_raw - n_identified:,}")
-        report.append({"step": "2_identified", "rows": n_identified, "note": "series_id & title ada"})
+            logger.warning("%s baris dibuang: url/title kosong.", f"{n_raw - n_identified:,}")
+        report.append({"step": "2_identified", "rows": n_identified, "note": "url & title ada"})
 
-        # --- Normalisasi sentinel
         normalized = normalize_sentinels(identified)
         null_stats = normalized.select(
             F.sum(F.col("chapter_count").isNull().cast("int")).alias("chapter_count"),
@@ -548,10 +532,7 @@ def run() -> dict:
         ).first()
         logger.info(
             "Sentinel dinormalkan jadi NULL -> chapter_count=%s, year=%s, rating_score=%s, tags=%s",
-            f"{null_stats['chapter_count']:,}",
-            f"{null_stats['year']:,}",
-            f"{null_stats['rating_score']:,}",
-            f"{null_stats['tags']:,}",
+            *(f"{null_stats[c]:,}" for c in ("chapter_count", "year", "rating_score", "tags")),
         )
         report.append(
             {
@@ -565,66 +546,60 @@ def run() -> dict:
             }
         )
 
-        # --- Deduplikasi
-        deduped = deduplicate(normalized)
-        n_dedup = deduped.count()
+        # Di-persist: dibaca lagi oleh hitungan sinopsis dan seluruh transformasi utama.
+        deduped = deduplicate(normalized).drop(*DROP_COLS).transform(add_synopsis_flags).persist()
+        counts = deduped.agg(
+            F.count(F.lit(1)).alias("n"),
+            F.sum(F.col("has_synopsis").cast("int")).alias("synopsis"),
+        ).first()
+        n_dedup, n_synopsis = counts["n"], int(counts["synopsis"] or 0)
         logger.info("Setelah dedup by series_id: %s baris (-%s).", f"{n_dedup:,}", n_identified - n_dedup)
-        report.append({"step": "4_deduplicated", "rows": n_dedup, "note": "kunci: series_id"})
-
-        # --- Buang kolom miskin informasi
-        pruned = deduped.drop(*DROP_COLS)
         logger.info("Kolom dibuang (>80%% kosong): %s", ", ".join(DROP_COLS))
-
-        # --- Gabungkan sinopsis dari dataset pendamping
-        with_synopsis = attach_synopsis(pruned, read_synopsis(spark))
-        n_synopsis = with_synopsis.filter(F.col("has_synopsis")).count()
+        report.append({"step": "4_deduplicated", "rows": n_dedup, "note": "kunci: series_id"})
         coverage = 100 * n_synopsis / n_dedup
-        logger.info(
-            "Sinopsis tergabung: %s dari %s novel (%.2f%% cakupan, minimal 10 kata).",
-            f"{n_synopsis:,}", f"{n_dedup:,}", coverage,
-        )
-        report.append(
-            {
-                "step": "5_synopsis_joined",
-                "rows": n_synopsis,
-                "note": f"cakupan {coverage:.2f}% (join by url, LEFT)",
-            }
-        )
+        report.append({"step": "5_with_synopsis", "rows": n_synopsis,
+                       "note": f"cakupan {coverage:.2f}% (minimal 10 kata)"})
 
-        # --- Transformasi utama
-        enriched = parse_multivalue(with_synopsis)
+        # Transformasi utama
+        enriched = parse_multivalue(deduped)
         enriched = apply_text_processing(enriched)
         enriched, global_mean = add_weighted_rating(enriched)
         enriched = add_derived_features(enriched)
 
-        # --- Baris tanpa sinyal teks tidak berguna untuk Fase 4
+        # Baris tanpa sinyal teks tidak berguna untuk Fase 4
         final = enriched.withColumn(
             "has_text_signal", (F.col("token_count") >= 3).cast("boolean")
         ).cache()
-        n_final = final.count()
-        n_text = final.filter(F.col("has_text_signal")).count()
-        n_reliable = final.filter(F.col("is_rated_reliable")).count()
+        totals = final.agg(
+            F.count(F.lit(1)).alias("n"),
+            F.sum(F.col("has_text_signal").cast("int")).alias("text"),
+            F.sum(F.col("is_rated_reliable").cast("int")).alias("reliable"),
+        ).first()
+        n_final, n_text, n_reliable = totals["n"], int(totals["text"] or 0), int(totals["reliable"] or 0)
+        deduped.unpersist()
+        raw.unpersist()
         logger.info(
             "Hasil akhir: %s baris | punya sinyal teks: %s | rating tepercaya: %s",
-            f"{n_final:,}",
-            f"{n_text:,}",
-            f"{n_reliable:,}",
+            f"{n_final:,}", f"{n_text:,}", f"{n_reliable:,}",
         )
         report.append({"step": "6_enriched", "rows": n_final, "note": f"C_global={global_mean:.4f}"})
         report.append({"step": "7_with_text_signal", "rows": n_text, "note": "token_count >= 3"})
         report.append({"step": "8_reliable_rating", "rows": n_reliable, "note": f">= {MIN_VOTES_RELIABLE} suara"})
 
-        # --- Tulis hasil bersih ke lake
+        # Dipartisi fisik per metadata_tier: kueri yang memfilter tier (dan HARUS,
+        # lihat governance_audit QLT-01b) melompati direktori 'listing' utuh.
+        # repartition dulu supaya tiap direktori berisi satu berkas.
         clean_uri = settings.minio.s3a_uri(settings.minio.bucket_clean, "novels_clean")
         (
-            final.repartition(4)  # 4 file part: seimbang untuk data ~4.5k baris
+            final.repartition("metadata_tier")
             .write.mode("overwrite")
             .option("compression", "snappy")
+            .partitionBy("metadata_tier")
             .parquet(clean_uri)
         )
-        logger.info("Data bersih ditulis ke %s", clean_uri)
+        logger.info("Data bersih ditulis ke %s (partisi fisik: metadata_tier)", clean_uri)
 
-        # --- Simpan laporan kualitas untuk ditampilkan di dashboard
+        # Simpan laporan kualitas untuk ditampilkan di dashboard
         report_uri = settings.minio.s3a_uri(settings.minio.bucket_curated, "analytics/quality_report")
         spark.createDataFrame(report).coalesce(1).write.mode("overwrite").parquet(report_uri)
         logger.info("Laporan kualitas ditulis ke %s", report_uri)

@@ -33,11 +33,9 @@ from Model.pipeline.train import out_of_fold_probabilities, split_indices
 ART = '/opt/project/Model/artifacts/'
 
 
-# --------------------------------------------------------------------------
 # Blok fitur padat: embedding pralatih yang sudah dihitung di luar CV.
 # Aman dari kebocoran — model encoder-nya beku, tidak pernah di-fit pada
 # data kita, jadi tidak ada informasi fold validasi yang bisa merembes.
-# --------------------------------------------------------------------------
 class DenseCols(BaseEstimator, TransformerMixin):
     def fit(self, X, y=None): return self
     def transform(self, X): return np.asarray(X, dtype=np.float32)

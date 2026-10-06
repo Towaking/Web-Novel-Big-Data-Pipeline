@@ -103,6 +103,9 @@ def read_parquet_dir(bucket: str, prefix: str, settings: Settings | None = None)
 
     settings = settings or get_settings()
     client = get_s3_client(settings)
+    # "/" penutup: tanpa itu prefix 'analytics/top_tags' ikut mengambil
+    # 'analytics/top_tags_x/...' dan kedua tabel tergabung diam-diam.
+    prefix = prefix.rstrip("/") + "/"
     parts = [
         obj["Key"]
         for obj in list_objects(bucket, prefix, settings)

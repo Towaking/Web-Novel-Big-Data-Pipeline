@@ -247,3 +247,201 @@ Tiga jenis label ini ditentukan oleh hal yang berbeda, dan yang bukan genre
 sungguhan konsisten mendapat skor terendah. Memisahkannya menjadi beberapa
 tugas prediksi adalah arah perbaikan berikutnya yang paling menjanjikan —
 belum dikerjakan karena mengubah definisi tugas, bukan sekadar modelnya.
+
+---
+
+## 6. Audit ketiga (2026-09-03) — elemen, model data, dan tata kelola
+
+Bagian ini melengkapi kontrak dengan tiga hal yang sebelumnya hanya tersirat di
+kode: klasifikasi format tiap elemen, model data yang dipilih, dan kontrol tata
+kelola yang benar-benar terpasang. Ketiganya kini **dihasilkan oleh modul yang
+dijalankan**, bukan ditulis tangan, sehingga ikut berubah bila datanya berubah:
+
+| Modul | Menghasilkan |
+|---|---|
+| `src/phases/data_catalog.py` | `curated-data/governance/data_elements` + `Doc/generated/data_elements.md` |
+| `src/phases/data_model.py` | 15 tabel di `curated-data/model/` (star schema, bridge, graf, operasi contoh) |
+| `src/phases/governance_audit.py` | `curated-data/governance/audit_report` + `Doc/generated/governance_audit.md` |
+
+### 6.1 Klasifikasi format — 20 / 6 / 2
+
+Dari 28 elemen: **20 terstruktur, 6 semi-terstruktur, 2 tidak terstruktur.**
+Yang semi-terstruktur: `genres`, `tags`, `authors` (daftar berpemisah koma),
+`release_frequency` (`"Every 0.9 Day(s)"` — angka tertanam di kalimat),
+`status_coo` (teks status + pola `"N Chapters"`), dan `url` (path hierarkis).
+Yang tidak terstruktur hanya `summary` dan `title`.
+
+Klasifikasi ini **tidak** disimpulkan dari tipe fisik. `genres` dan
+`release_frequency` sama-sama `string`, tetapi yang satu daftar dan yang lain
+kalimat berpola — tidak ada tipe fisik yang membedakannya.
+
+**Angka sentinel-nya divalidasi silang.** Modul inventaris menghitung ulang
+porsi sentinel secara independen dan hasilnya identik dengan §3: `year` 22,66%,
+`chapter_count` 20,22%, `rating_score` 5,56%, `artists` 84,67%,
+`english_publisher` 93,72%, `status_coo` 8,81%, `original_publisher` 18,00%.
+
+Satu koreksi metodologis yang perlu dicatat: aturan sentinel **wajib
+dideklarasikan per kolom**, tidak boleh disimpulkan dari tipe. Percobaan
+pertama memperlakukan semua `0` numerik sebagai sentinel, dan akibatnya
+`is_completed` terlaporkan 52,63% "hilang" padahal `0` di situ berarti *belum
+tamat* — nilai yang sah. Sama untuk `licensed` (94,06%) dan
+`completely_translated` (87,25%). Kolom-kolom itu kini beraturan `none`.
+
+### 6.2 `authors` — satu orang, dua aksara
+
+**Temuan baru yang tidak tercatat di audit sebelumnya.** Kolom `authors` bukan
+selalu daftar beberapa penulis. Pada **1.494 novel (34,6%)** isinya satu orang
+yang ditulis dua kali — nama asli dan romanisasinya:
+
+```
+"Mizume, ミズメ"            → satu penulis
+"Chae Yeon-sil, 채연실"      → satu penulis
+"Tang Jia San Shao, 唐家三少" → satu penulis
+```
+
+Diperlakukan apa adanya, dimensi penulis berisi **5.439 entitas untuk 4.461
+novel**, dan setiap analitik tingkat penulis menghitung ganda.
+
+**Aturan yang dipakai.** Dua nama dianggap alias bila (a) salah satu beraksara
+CJK/Hangul/Kana dan yang lain tidak, DAN (b) yang jarang tidak pernah muncul
+tanpa yang sering (`co_occurrence == min(count_a, count_b)`). Syarat (b) memakai
+*containment*, bukan "selalu bersama" — nama asli kerap muncul sendirian di
+novel lain yang romanisasinya tidak dicatat, sehingga aturan "selalu bersama"
+melewatkan 1.510 → hanya menangkap sebagian.
+
+**Batas yang sengaja dipasang.** Menutup alias secara transitif salah: trio
+penulis yang selalu berkarya bersama tertarik jadi satu orang —
+
+```
+"Aono Hakuto, Imai Santarou, Maraiya Mū, マライヤ・ムー, 今井三太郎, 蒼乃白兎"
+   → 3 penulis x 2 aksara, BUKAN 1 orang
+```
+
+Karena itu komponen hanya digabung bila mengandung **tepat satu** nama
+beraksara asli. Hasilnya:
+
+| Kategori | Komponen | Nama |
+|---|---:|---:|
+| Tunggal (tak berubah) | 2.674 | 2.674 |
+| Digabung (1 nama asli + n romanisasi) | 1.266 | 2.624 |
+| **Ambigu — sengaja tidak digabung** | 36 | 141 |
+| **Total entitas** | **4.081** | 5.439 |
+
+Yang ambigu tetap terpecah dan ditandai `resolution = "ambigu"` di
+`dim_author`, termasuk kasus yang sebenarnya sama seperti `荆柯守`/`荊柯守`
+(Mandarin sederhana vs tradisional) dan `Gu Long`/`古龍`/`古龙`. **Melewatkan
+penggabungan yang benar lebih murah daripada melebur dua orang berbeda** —
+kesalahan jenis pertama menyisakan duplikat yang kelihatan, jenis kedua
+menghasilkan entitas palsu yang tidak kelihatan.
+
+### 6.3 Model data — dua model, bukan satu
+
+| Karakteristik data | Model | Operasi yang jadi murah |
+|---|---|---|
+| Metrik & dimensi atomik | Star schema (`fact_novel` + 6 `dim_*`) | filter, join berbintang, roll-up OLAP |
+| Multi-nilai (`genres`/`tags`/`authors`) | 3 bridge table hasil `explode` | `GROUP BY` per nilai, tanpa `LIKE '%..%'` |
+| Relasi antar-entitas | Property graph (9.334 simpul, 77.493 sisi) | traversal 2-hop, ko-okurensi, jangkauan |
+| Sinopsis prosa | Matriks fitur TF-IDF/embedding (Fase 4) | kemiripan kosinus, klasifikasi |
+
+**Grain tabel fakta = satu baris per novel**, bukan per novel-genre. Grain
+per novel-genre akan menggandakan `rating_votes` pada novel bergenre banyak dan
+membuat total suara katalog membengkak 2–3x. Analisis per genre tetap bisa
+lewat `bridge_novel_genre`, dengan konsekuensi yang disadari: hasilnya aditif
+lintas novel, **bukan** lintas genre.
+
+Grafnya tidak dijalankan di database graf terpisah karena semua pertanyaan graf
+proyek ini berkedalaman ≤ 2 hop pada 4.461 simpul novel — self-join
+menyelesaikannya dalam hitungan detik tanpa menambah satu service pun. Bentuk
+`nodes`/`edges` standar tetap dimaterialisasi supaya bisa dimuat ke
+Neo4j/GraphFrames tanpa memodelkan ulang bila kebutuhannya berkembang.
+
+### 6.4 Kontrol tata kelola yang terpasang
+
+Audit menjalankan 21 pemeriksaan: **14 lulus, 2 peringatan, 0 gagal.**
+
+Yang benar-benar dipasang (bukan sekadar didokumentasikan):
+
+- **Versioning aktif** di ketiga bucket — pemulihan & jejak audit.
+- **Akses anonim ditutup** (`mc anonymous set none`) di ketiga bucket.
+- **Akun read-only `novel-dashboard`** dengan policy `novel-readonly`, dipakai
+  service streamlit. Diuji nyata: baca berhasil, `PutObject` ditolak
+  `AccessDenied`. Ini yang membuat SEC-04 berstatus lulus, bukan klaim.
+- Kredensial berjenjang di `MinioConfig` (`MINIO_ACCESS_KEY` → fallback root)
+  sehingga least privilege per service tidak butuh perubahan kode fase.
+
+Dua peringatan yang **sengaja diterima** untuk lingkungan lokal, dan tercatat
+sebagai tindak lanjut alih-alih disembunyikan: kredensial masih bawaan
+(`minioadmin`) dan tidak ada TLS (`http://minio:9000`, hanya melintasi bridge
+network Docker). Keduanya wajib ditutup sebelum stack ini keluar dari localhost.
+
+**Privasi:** 0 kecocokan PII langsung (email/telepon) di seluruh kolom teks
+kedua berkas, dan tidak ada satu pun kolom ber-*grain* pengguna — sinyal
+pembaca hanya tersedia sebagai agregat (`rating_votes`, `reading_list_count`),
+sehingga tidak ada subjek data yang dapat diidentifikasi ulang. Yang tetap
+perlu dinyatakan dasar pemrosesannya: `authors` memuat nama pena yang
+dipublikasikan platform.
+
+### 6.5 Plafon peringkat aktivitas — dua kolom yang TIDAK sebanding lintas waktu
+
+**Ditemukan 2026-09-04, sebelum tahap `detail` dijalankan.**
+
+NovelUpdates kini **memotong** `activity_week_rank` dan `activity_month_rank`
+di `#2000`. Nilai itu berarti "di luar 2000 besar", bukan peringkat sebenarnya.
+Diverifikasi pada tiga novel dengan popularitas sangat berbeda:
+
+| Novel | week | month | all time | reading list |
+|---|---:|---:|---:|---:|
+| Emperor's Domination (18.228 pembaca) | **2000** | **2000** | 1 | 18.228 |
+| Oya ga Saikon (1.161 pembaca) | **2000** | **2000** | 11.841 | 1.161 |
+| 2 Years Until Humanity's Extinct (56 pembaca) | **2000** | **2000** | 47.037 | 56 |
+
+`activity_all_rank` dan kedua peringkat reading list **tidak** terpotong.
+
+**Kenapa ini penting.** `data_novel.csv` diambil sebelum situs berubah dan
+tidak punya plafon ini — maksimumnya 19.302 (week) dan 25.077 (month). Jadi:
+
+- Baris lama bernilai 2000 = peringkat 2000 yang sesungguhnya.
+- Baris hasil scrape baru bernilai 2000 = "tidak masuk 2000 besar", bisa berarti
+  peringkat 40.000.
+
+Membandingkan keduanya tanpa penanganan membuat novel yang sebenarnya sepi
+tampak jauh lebih populer daripada novel lama yang benar-benar di peringkat
+19.302. Ini kesalahan yang tidak akan melempar error apa pun.
+
+**Aturan yang WAJIB diterapkan saat `detail.csv` digabungkan:**
+
+1. Pada baris yang berasal dari scrape baru, `activity_week_rank == 2000` dan
+   `activity_month_rank == 2000` → **NULL**, diperlakukan seperti sentinel
+   `chapter_count = 0` dan `year = 0`.
+2. Baris `metadata_tier = 'full'` (dari `data_novel.csv`) **tidak** disentuh.
+3. Analitik apa pun yang memakai kedua kolom itu harus melaporkan populasinya,
+   atau memakai `activity_all_rank` yang bebas plafon.
+
+Sengaja **belum** dipasang di `normalize_sentinels`: kolom peringkat baru masuk
+lewat tahap `detail` yang belum diintegrasikan, dan guard di fungsi itu akan
+jadi kode mati karena `metadata_tier` belum ada saat ia berjalan.
+
+### 6.6 Perluasan katalog — 4.461 → 39.670
+
+Scrape ulang 2026-09-03/04 memakai `series-ranking` (bukan `series-finder`,
+yang meng-clamp di 100 halaman) tanpa parameter `ge=`:
+
+| | Sebelum | Sesudah |
+|---|---:|---:|
+| Novel | 4.461 | **39.670** |
+| Genre unik | 33 | **35** |
+| Genre di bawah ambang 50 | 9 | **0** |
+| Total label genre | 18.905 | **205.743** |
+| Rating tepercaya (≥10 suara) | 2.058 (46,1%) | 2.058 (**5,2%**) |
+
+Sembilan genre yang dulu tersingkir dari model kini jauh di atas ambang —
+`Yaoi` 4→5.468, `Shounen` 18→4.519, `Josei` 29→4.001, `Shoujo` 4→3.357,
+`Gender Bender` 1→3.024, `Smut` 2→2.520, `Seinen` 15→2.287,
+`Shounen Ai` 1→1.902, `Mecha` 43→695 — ditambah dua genre yang sebelumnya
+**sama sekali tidak ada**: `Yuri` 0→5.072 dan `Shoujo Ai` 0→700.
+
+**Harga yang harus disadari:** proporsi rating tepercaya anjlok dari 46,1% ke
+5,2%. Bukan karena ada yang hilang — jumlah absolutnya tetap 2.058 — melainkan
+karena 35.209 baris baru berasal dari halaman listing yang tidak memuat rating
+sama sekali. Kolom `metadata_tier` menandainya, dan setiap metrik dari halaman
+detail wajib memfilter `metadata_tier = 'full'` sampai tahap `detail` selesai.

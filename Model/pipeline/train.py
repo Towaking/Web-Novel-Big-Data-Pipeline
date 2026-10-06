@@ -129,14 +129,25 @@ def train_all(
     aug_config: AugmentationConfig | None = None,
 ) -> tuple[dict, dict]:
     """Latih seluruh arsitektur pada pembagian data yang identik."""
+    from Model.pipeline.embeddings import reserve
+
+    # Seluruh korpus (fold CV + fit akhir + uji) harus muat di memo embedding;
+    # ~40 ribu x 384 float32 = ~60 MB.
+    reserve(2 * len(frame))
     artifacts, metrics = {}, {}
     for name in names or list(mdl.MODEL_CATALOG):
         model, thresholds, scores = train_single(
             name, frame, y, labels, dev_idx, test_idx, feature_config, aug_config
         )
-        artifacts[name] = {"pipeline": model, "thresholds": thresholds}
+        # `labels` ikut disimpan per model: penggabungan latih-parsial
+        # (Model/train.py --models) harus bisa memastikan semua model berbagi
+        # ruang label yang sama dengan genre_binarizer.
+        artifacts[name] = {"pipeline": model, "thresholds": thresholds, "labels": list(labels)}
         metrics[name] = scores
 
-    best = max(metrics, key=lambda k: metrics[k]["f1_macro"])
-    logger.info("Model terbaik menurut makro-F1: %s (%.4f)", best, metrics[best]["f1_macro"])
+    # Dipilih dari skor OOF set dev, bukan skor uji: memilih model berdasarkan
+    # set uji membuat skor uji pemenang bias optimistis (set uji ikut seleksi).
+    best = max(metrics, key=lambda k: metrics[k]["f1_macro_oof"])
+    logger.info("Model terbaik menurut makro-F1 OOF: %s (OOF %.4f, uji %.4f)",
+                best, metrics[best]["f1_macro_oof"], metrics[best]["f1_macro"])
     return artifacts, {"models": metrics, "best_model": best, "labels": labels}

@@ -1,4 +1,3 @@
-# ============================================================
 # Base image tunggal untuk seluruh compute layer.
 #
 # Alasan desain:
@@ -7,7 +6,6 @@
 #    Spark Master, Worker, Driver (pipeline), sekaligus Streamlit.
 #  - Kesamaan image menjamin versi Python & PySpark identik di
 #    semua node -> menghindari serialization mismatch saat UDF.
-# ============================================================
 FROM python:3.11-slim-bookworm
 
 ARG HADOOP_AWS_VERSION=3.3.4
@@ -20,7 +18,7 @@ ENV PYTHONUNBUFFERED=1 \
     SPARK_HOME=/usr/local/lib/python3.11/site-packages/pyspark \
     PYTHONPATH=/opt/project
 
-# --- Layer 1: system runtime (JVM untuk Spark) ---
+# Layer 1: system runtime (JVM untuk Spark)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         openjdk-17-jre-headless \
         curl \
@@ -28,12 +26,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# --- Layer 2: PySpark (jarang berubah, dipisah agar cache-nya awet) ---
+# Layer 2: PySpark (jarang berubah, dipisah agar cache-nya awet)
 # Dipasang lebih dulu dan terpisah dari requirements lain supaya perubahan
 # dependency ML (yang sering) tidak memaksa unduh ulang jar 200 MB di bawah.
 RUN pip install --upgrade pip && pip install pyspark==3.5.3
 
-# --- Layer 3: konektor S3A (MinIO) ---
+# Layer 3: konektor S3A (MinIO)
 # Di-bake ke dalam image, BUKAN via --packages saat runtime,
 # supaya container tidak bergantung pada koneksi Maven dan
 # startup job tetap deterministik/offline-friendly.
@@ -64,11 +62,11 @@ RUN set -eux; \
 
 ENV PATH="${SPARK_HOME}/bin:${SPARK_HOME}/sbin:${JAVA_HOME}/bin:${PATH}"
 
-# --- Layer 4: dependency aplikasi (sering berubah, ditaruh paling akhir) ---
+# Layer 4: dependency aplikasi (sering berubah, ditaruh paling akhir)
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install -r /tmp/requirements.txt
 
-# --- Layer 5: PyTorch (CPU-only) untuk model deep learning Fase 4 ---
+# Layer 5: PyTorch (CPU-only) untuk model deep learning Fase 4
 # Dipasang dari indeks CPU PyTorch: wheel-nya ~200 MB, sedangkan wheel default
 # di PyPI membawa dependensi CUDA ~2,5 GB yang sama sekali tidak terpakai di
 # lingkungan tanpa GPU ini. --retries dinaikkan karena unduhan besar di jaringan
@@ -77,14 +75,22 @@ RUN pip install --retries 10 --timeout 120 \
         --index-url https://download.pytorch.org/whl/cpu \
         torch==2.4.1
 
-# --- Layer 6: encoder kalimat pralatih (BGE) ---
+# Layer 6: encoder kalimat pralatih (BGE)
 # Bobotnya di-bake ke dalam image dengan alasan yang sama seperti jar S3A di
 # atas: jalur inferensi tidak boleh bergantung pada koneksi ke Hugging Face.
 # Artefak joblib hanya menyimpan NAMA model, jadi tanpa langkah ini container
 # yang tanpa jaringan akan gagal memuat Head A arsitektur `hybrid`.
 #
 # HF_HOME ditaruh di luar $HOME supaya cache-nya dapat dibaca semua user
-# container (build berjalan sebagai root, runtime sebagai `spark`).
+# container (build berjalan sebagai root, runtime sebagai `spark`). Izinnya
+# harus mengandung WRITE, bukan sekadar baca: huggingface_hub menulis berkas
+# penanda (`.no_exist`, lock) ke dalam cache bahkan ketika seluruh bobot sudah
+# lengkap, sehingga cache read-only mematikan inferensi dengan PermissionError.
+#
+# `version.txt` ditulis di sini karena transformers menganggap cache tanpa berkas
+# itu sebagai cache pra-v4.22 yang perlu dimigrasi, lalu memuntahkan peringatan
+# "semua panggilan from_pretrained() kemungkinan besar akan gagal" — keliru, dan
+# persis jenis umpan yang bikin orang mengejar bug yang tidak ada.
 # Unduhannya dibungkus retry: registry HF memutus koneksi di tengah berkas
 # jauh lebih sering daripada yang diduga, dan snapshot yang terpotong baru
 # ketahuan saat inferensi pertama.
@@ -93,9 +99,18 @@ ENV HF_HOME=/opt/hf-cache \
 COPY fetch_encoder.py /tmp/fetch_encoder.py
 RUN mkdir -p ${HF_HOME} \
     && python /tmp/fetch_encoder.py \
-    && chmod -R a+rX ${HF_HOME}
+    && echo 1 > ${HF_HOME}/hub/version.txt \
+    && chmod -R a+rwX ${HF_HOME}
 
-# --- Layer 7: workspace ---
+# Seluruh bobot sudah berada di dalam image, jadi jalur inferensi tidak perlu
+# lagi menghubungi Hugging Face — itulah alasan Layer 6 ada. Tanpa flag ini
+# huggingface_hub tetap melakukan panggilan revalidasi tiap kali encoder dimuat:
+# menambah latensi saat online, dan gagal total saat tidak ada jaringan.
+# Disetel SETELAH unduhan, karena menyetelnya lebih awal membuat
+# fetch_encoder.py sendiri tidak bisa mengambil bobotnya.
+ENV HF_HUB_OFFLINE=1
+
+# Layer 7: workspace
 WORKDIR /opt/project
 RUN useradd --create-home --uid 1000 spark \
     && mkdir -p /opt/project /home/spark/.ivy2 \
@@ -105,7 +120,7 @@ USER spark
 
 CMD ["bash"]
 
-# --- Layer 6: pembatasan thread BLAS/OpenMP ---
+# Layer 6: pembatasan thread BLAS/OpenMP
 # numpy/scikit-learn (OpenBLAS) mendeteksi seluruh core host dan membuka
 # thread-pool sebesar itu. Di dalam container yang juga menjalankan JVM Spark,
 # kombinasi ini bisa deadlock: seluruh thread berhenti di futex_wait dan job

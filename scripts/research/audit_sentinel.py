@@ -21,9 +21,7 @@ import pandas as pd
 df = pd.read_csv("/opt/project/Dataset/data_novel.csv")
 print("n =", len(df))
 
-# ---------------------------------------------------------------------------
 # 1. status_coo -> jumlah bab
-# ---------------------------------------------------------------------------
 NUM = r"(\d[\d,]*)"
 pat_ch = re.compile(NUM + r"\s*(?:chapters?|chs?)\b", re.I)
 pat_vol = re.compile(NUM + r"\s*(?:volumes?|vols?)\b", re.I)
@@ -78,9 +76,7 @@ print("  sesudah : n=%d  mean=%.1f  median=%.1f" % (len(new), new.mean(), new.me
 print("  selisih : +%d baris (%.1f%% lebih banyak), mean %+.1f bab"
       % (len(new) - len(old), 100 * (len(new) - len(old)) / len(old), new.mean() - old.mean()))
 
-# ---------------------------------------------------------------------------
 # 2. release_frequency -> hari per bab (fitur numerik, saat ini tak dipakai)
-# ---------------------------------------------------------------------------
 pat_freq = re.compile(r"every\s+([\d.]+)\s+day", re.I)
 
 
@@ -104,9 +100,7 @@ ok = df[(df.rating_votes >= 10) & df.days_per_chapter.notna()]
 r = np.corrcoef(np.log1p(ok.days_per_chapter), ok.rating_score)[0, 1]
 print("korelasi log(hari/bab) ~ rating (n=%d): r = %+.4f" % (len(ok), r))
 
-# ---------------------------------------------------------------------------
 # 3. year == 0
-# ---------------------------------------------------------------------------
 print("\n=== 3. year == 0 ===")
 zy = df["year"] == 0
 print("baris sentinel : %d (%.2f%%)" % (zy.sum(), 100 * zy.mean()))

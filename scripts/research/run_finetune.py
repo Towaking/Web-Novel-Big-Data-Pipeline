@@ -46,9 +46,7 @@ a = ap.parse_args()
 torch.set_num_threads(a.threads)
 torch.manual_seed(RANDOM_STATE)
 
-# ---------------------------------------------------------------------------
 # Data
-# ---------------------------------------------------------------------------
 df = pd.read_parquet(ART + "_research_frame.parquet")
 Y, LABELS, _ = build_label_matrix(df["genre_list"], MIN_GENRE_SUPPORT)
 
@@ -127,9 +125,7 @@ def train_fold(tr_idx, va_idx, y_tr):
     return model, np.vstack(out)
 
 
-# ---------------------------------------------------------------------------
 # OOF pada set pengembangan -> ambang; lalu model akhir -> set uji
-# ---------------------------------------------------------------------------
 t_all = time.time()
 oof = np.zeros((len(dev), len(LABELS)), dtype=np.float32)
 kf = KFold(n_splits=a.folds, shuffle=True, random_state=RANDOM_STATE)

@@ -1,4 +1,3 @@
-# ============================================================
 # Local Big Data Stack - Novel Analytics & Hybrid AI Pipeline
 #
 # Topologi:
@@ -11,38 +10,73 @@
 #
 # Semua compute service memakai image yang sama (bigdata-novel:base)
 # agar versi Python/PySpark konsisten antara driver dan executor.
-# ============================================================
 
 x-spark-common: &spark-common
   image: bigdata-novel:base
   build:
     context: ./docker
     dockerfile: Dockerfile
-  env_file: .env
+  env_file: [.env, docker/tls/tls.env]
   volumes:
     - ./:/opt/project
     - ivy-cache:/home/spark/.ivy2
+    - tls-certs:/certs:ro
   networks: [bigdata-net]
+
+# Seluruh node Hadoop (HDFS + YARN) memakai image yang sama dan satu berkas
+# konfigurasi, docker/hadoop.env.
+#
+# `image: apache/hadoop:3.3.6` resmi TIDAK cukup: basisnya CentOS 7 tanpa
+# Python 3, dan mapper/reducer Hadoop Streaming (src/mapreduce/) butuh Python 3
+# di setiap NodeManager. `docker/Dockerfile.hadoop` menambahkannya sebagai satu
+# layer tipis di atas image resmi - lihat komentar di berkas itu soal kenapa
+# `yum install python3` polos gagal (mirrorlist CentOS 7 sudah dimatikan).
+x-hadoop-common: &hadoop-common
+  image: bigdata-novel:hadoop
+  build:
+    context: ./docker
+    dockerfile: Dockerfile.hadoop
+    args:
+      HADOOP_BASE_TAG: ${HADOOP_IMAGE_TAG:-3.3.6}
+  env_file: docker/hadoop.env
+  networks: [bigdata-net]
+  restart: unless-stopped
 
 services:
 
-  # ---------------------------------------------------------
-  # 1. Object Storage (Data Lake)
-  # ---------------------------------------------------------
+  # 0. Private CA + MinIO certificate (idempotent, exits when done)
+  certs-init:
+    image: bigdata-novel:base
+    container_name: novel-certs-init
+    user: "0"
+    entrypoint: ["/bin/sh", "/opt/tls/make_certs.sh"]
+    volumes:
+      - ./docker/tls:/opt/tls:ro
+      - tls-certs:/certs
+    networks: [bigdata-net]
+    restart: "no"
+
+  # 1. Object Storage (Data Lake), HTTPS only
   minio:
     image: minio/minio:${MINIO_IMAGE_TAG:-latest}
     container_name: novel-minio
-    command: server /data --console-address ":9001"
+    command: server /data --console-address ":9001" --certs-dir /certs/minio
+    depends_on:
+      certs-init:
+        condition: service_completed_successfully
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     ports:
-      - "${MINIO_API_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+      # Every host port binds to 127.0.0.1 unless HOST_BIND says otherwise: Jupyter
+      # runs without a token and MinIO with local credentials, so 0.0.0.0 exposes both.
+      - "${HOST_BIND:-127.0.0.1}:${MINIO_API_PORT:-9000}:9000"
+      - "${HOST_BIND:-127.0.0.1}:${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio-data:/data
+      - tls-certs:/certs:ro
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD", "curl", "-f", "--cacert", "/certs/ca.crt", "https://localhost:9000/minio/health/live"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -50,9 +84,7 @@ services:
     networks: [bigdata-net]
     restart: unless-stopped
 
-  # ---------------------------------------------------------
   # 2. Bootstrap bucket (idempotent, exit setelah selesai)
-  # ---------------------------------------------------------
   minio-init:
     image: minio/mc:${MC_IMAGE_TAG:-latest}
     container_name: novel-minio-init
@@ -60,21 +92,62 @@ services:
       minio:
         condition: service_healthy
     env_file: .env
-    entrypoint: >
-      /bin/sh -c "
-      mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD} &&
-      mc mb --ignore-existing local/$${BUCKET_RAW} &&
-      mc mb --ignore-existing local/$${BUCKET_CLEAN} &&
-      mc mb --ignore-existing local/$${BUCKET_CURATED} &&
-      echo '[minio-init] buckets siap:' &&
-      mc ls local
-      "
+    volumes:
+      - tls-certs:/certs:ro
+    # Idempotent: aman dijalankan ulang. Selain membuat bucket, blok ini
+    # memasang kontrol tata kelola yang diperiksa `src/phases/governance_audit.py`
+    # — versioning (CMP-03), tertutup dari anonim (SEC-03), dan akun read-only
+    # untuk dashboard (SEC-04). Policy-nya dirakit dari variabel bucket supaya
+    # tidak pernah lepas sinkron dengan .env.
+    # Block scalar literal (|), BUKAN folded (>): skrip shell butuh newline
+    # yang dipertahankan apa adanya. Pada folded scalar, baris yang lebih
+    # menjorok justru tetap jadi baris sendiri dan argumen perintah terlepas
+    # menjadi perintah baru.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        mkdir -p /root/.mc/certs/CAs && cp /certs/ca.crt /root/.mc/certs/CAs/novellens-ca.crt
+        mc alias set local https://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"
+
+        RES=""
+        for B in "$${BUCKET_RAW}" "$${BUCKET_CLEAN}" "$${BUCKET_CURATED}"; do
+          mc mb --ignore-existing "local/$$B"
+          mc version enable "local/$$B"
+          mc anonymous set none "local/$$B"
+          # Versioning keeps every pipeline rewrite: old versions expire (30 days in raw,
+          # 7 elsewhere, newest one always kept). `ilm import` replaces, so reruns stay idempotent.
+          DAYS=7; [ "$$B" = "$${BUCKET_RAW}" ] && DAYS=30
+          printf '{"Rules":[{"ID":"expire-noncurrent","Status":"Enabled","Filter":{"Prefix":""},"NoncurrentVersionExpiration":{"NoncurrentDays":%s,"NewerNoncurrentVersions":1}},{"ID":"drop-orphan-delete-markers","Status":"Enabled","Filter":{"Prefix":""},"Expiration":{"ExpiredObjectDeleteMarker":true}}]}' "$$DAYS" \
+            | mc ilm import "local/$$B"
+          RES="$$RES\"arn:aws:s3:::$$B\",\"arn:aws:s3:::$$B/*\","
+        done
+
+        cat > /tmp/readonly.json <<EOF
+        {"Version":"2012-10-17","Statement":[{"Effect":"Allow",
+         "Action":["s3:GetObject","s3:ListBucket"],
+         "Resource":[$${RES%,}]}]}
+        EOF
+
+        mc admin policy create local novel-readonly /tmp/readonly.json 2>/dev/null \
+          || mc admin policy add local novel-readonly /tmp/readonly.json 2>/dev/null \
+          || echo '[minio-init] policy novel-readonly sudah ada'
+        # Not masked with `|| echo`: `add` on an existing user resets its secret, so a
+        # failure here means a rotated password did not land.
+        mc admin user add local "$${MINIO_READONLY_USER}" "$${MINIO_READONLY_PASSWORD}"
+        mc admin policy attach local novel-readonly --user "$${MINIO_READONLY_USER}" 2>/dev/null \
+          || mc admin policy set local novel-readonly "user=$${MINIO_READONLY_USER}" 2>/dev/null \
+          || echo '[minio-init] policy sudah terpasang'
+
+        echo '[minio-init] buckets siap (versioning aktif, akses anonim ditutup):'
+        mc ls local
+        echo '[minio-init] akun read-only:'
+        mc admin user list local
     networks: [bigdata-net]
     restart: "no"
 
-  # ---------------------------------------------------------
   # 3. Spark Standalone Master
-  # ---------------------------------------------------------
   spark-master:
     <<: *spark-common
     container_name: novel-spark-master
@@ -83,8 +156,8 @@ services:
       spark-class org.apache.spark.deploy.master.Master
       --host spark-master --port 7077 --webui-port 8080
     ports:
-      - "${SPARK_MASTER_UI_PORT:-8080}:8080"
-      - "7077:7077"
+      - "${HOST_BIND:-127.0.0.1}:${SPARK_MASTER_UI_PORT:-8080}:8080"
+      - "${HOST_BIND:-127.0.0.1}:7077:7077"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080"]
       interval: 10s
@@ -93,9 +166,7 @@ services:
       start_period: 20s
     restart: unless-stopped
 
-  # ---------------------------------------------------------
   # 4. Spark Worker (scale: docker compose up --scale spark-worker=3)
-  # ---------------------------------------------------------
   spark-worker:
     <<: *spark-common
     command: >
@@ -114,13 +185,16 @@ services:
         condition: service_healthy
     ports:
       # Rentang host-port supaya `--scale spark-worker=N` tidak bentrok.
-      - "${SPARK_WORKER_UI_PORT:-8081}-8085:8081"
+      # Kedua ujung rentang HARUS berasal dari variabel, bukan salah satu
+      # di-hardcode: bug yang pernah terjadi di sini adalah ujung akhir
+      # ("8085") dibiarkan tetap sementara awalnya diganti ke 7081, sehingga
+      # tercipta rentang tak sengaja 7081-8085 (1000+ port) yang menabrak
+      # rentang terlarang Windows/Hyper-V di tengahnya.
+      - "${HOST_BIND:-127.0.0.1}:${SPARK_WORKER_UI_PORT:-8081}-${SPARK_WORKER_UI_PORT_END:-8085}:8081"
     restart: unless-stopped
 
-  # ---------------------------------------------------------
   # 5. Driver / Job Runner (tempat submit Fase 1-4)
   #    Idle by default -> jalankan job via `docker compose exec`.
-  # ---------------------------------------------------------
   pipeline:
     <<: *spark-common
     container_name: novel-pipeline
@@ -132,20 +206,44 @@ services:
         condition: service_completed_successfully
       spark-master:
         condition: service_healthy
-    command: ["tail", "-f", "/dev/null"]
+    # Idle by default, tapi memastikan dulu dependensi scraper ada.
+    #
+    # `curl_cffi` sudah tercatat di docker/requirements.txt, namun image yang
+    # sedang dipakai bisa tertinggal di belakangnya — rebuild proyek ini beberapa
+    # kali gagal karena unduhan besar terputus. Tanpa jaring pengaman ini,
+    # scripts/scraper/novelupdates.py mati dengan ModuleNotFoundError setiap kali
+    # container dibuat ulang, dan itu berulang karena `env_file` memaksa recreate
+    # tiap kali cookie Cloudflare di .env diperbarui (1-3x sehari).
+    #
+    # Idempotent: begitu paketnya benar-benar ter-bake ke image, cabang
+    # `pip install` tidak pernah tersentuh lagi (biayanya satu import ~50 ms).
+    # Kegagalan pemasangan sengaja tidak mematikan container — lebih baik
+    # container tetap hidup untuk job Spark daripada crash-loop gara-gara scraper.
+    command:
+      - sh
+      - -c
+      - |
+        python -c 'import curl_cffi' 2>/dev/null \
+          || pip install --quiet --retries 10 --timeout 120 curl_cffi \
+          || echo '[pipeline] PERINGATAN: curl_cffi gagal dipasang - scraper tidak akan jalan'
+        exec tail -f /dev/null
     restart: unless-stopped
 
-  # ---------------------------------------------------------
   # 6. Notebook — eksplorasi interaktif PySpark
   #    Driver Spark tersendiri (hostname `notebook`) supaya job dari
   #    notebook tidak bentrok dengan job batch di container `pipeline`.
-  # ---------------------------------------------------------
   notebook:
     <<: *spark-common
     container_name: novel-notebook
     hostname: notebook
     environment:
       SPARK_DRIVER_HOST: notebook
+      # Worker hanya punya 2 core / 3G. Tanpa batas ini, kernel notebook yang
+      # memegang sesi mengambil semua core dan executor 2G, sehingga aplikasi
+      # pipeline tertahan WAITING tanpa error. 1 core + 1G masih menyisakan
+      # 1 core + 2G untuk executor pipeline.
+      SPARK_CORES_MAX: "1"
+      SPARK_EXECUTOR_MEMORY: 1G
     depends_on:
       minio-init:
         condition: service_completed_successfully
@@ -163,18 +261,23 @@ services:
       - --ServerApp.token=${JUPYTER_TOKEN:-}
       - --ServerApp.password=
     ports:
-      - "${JUPYTER_PORT:-8888}:8888"
+      - "${HOST_BIND:-127.0.0.1}:${JUPYTER_PORT:-8888}:8888"
     restart: unless-stopped
 
-  # ---------------------------------------------------------
   # 7. Presentation Layer (Fase 5)
-  # ---------------------------------------------------------
   streamlit:
     <<: *spark-common
     container_name: novel-streamlit
     hostname: streamlit
     environment:
       SPARK_DRIVER_HOST: streamlit
+      # Least privilege: dashboard hanya membaca artefak, tidak pernah menulis
+      # ke lake. Dijalankan dengan akun read-only supaya bug di lapisan
+      # presentasi tidak bisa merusak data kurasi (kontrol SEC-04).
+      MINIO_ACCESS_KEY: ${MINIO_READONLY_USER:-novel-dashboard}
+      MINIO_SECRET_KEY: ${MINIO_READONLY_PASSWORD:?set MINIO_READONLY_PASSWORD in .env}
+      # 1 = published deployment: hides the full-dataset and lake-inventory pages and error details.
+      NOVELLENS_PUBLIC: ${NOVELLENS_PUBLIC:-0}
     depends_on:
       minio-init:
         condition: service_completed_successfully
@@ -184,8 +287,169 @@ services:
       --server.address=0.0.0.0
       --server.headless=true
     ports:
-      - "${STREAMLIT_PORT:-8501}:8501"
+      - "${HOST_BIND:-127.0.0.1}:${STREAMLIT_PORT:-8501}:8501"
     restart: unless-stopped
+
+  # 8. HDFS - Distributed File System
+  #
+  #    MinIO (object storage) tetap menjadi data lake untuk Fase 1-4.
+  #    HDFS menyimpan dataset hasil pemisahan format (Dataset/variety/) yang
+  #    diproses MapReduce. Dua tier dengan peran berbeda:
+  #      MinIO : zona raw/clean/curated, versioning, dibaca Spark & dashboard
+  #      HDFS  : blok berreplika di beberapa DataNode, dekat dengan compute
+  #              MapReduce (data locality) - bukan salinan kedua lake.
+  #    Replikasi 2 dengan dua DataNode: satu DataNode boleh mati tanpa data hilang.
+  # Named volume dibuat root:root oleh Docker; container Hadoop berjalan
+  # sebagai `hadoop` (uid 1000) dan tidak bisa menulis ke situ. Satu init
+  # container per volume, jalan sekali sebagai root, memperbaiki kepemilikan
+  # sebelum namenode/datanode start - pola yang sama seperti `minio-init`.
+  hdfs-permissions:
+    image: bigdata-novel:hadoop
+    user: root
+    volumes:
+      - namenode-data:/mnt/name
+      - datanode1-data:/mnt/data1
+      - datanode2-data:/mnt/data2
+    entrypoint: ["sh", "-c", "chown -R hadoop:users /mnt/name /mnt/data1 /mnt/data2"]
+    networks: [bigdata-net]
+    restart: "no"
+
+  namenode:
+    <<: *hadoop-common
+    container_name: novel-namenode
+    hostname: namenode
+    command: ["hdfs", "namenode"]
+    depends_on:
+      hdfs-permissions:
+        condition: service_completed_successfully
+    environment:
+      # Entrypoint image (/opt/starter.sh) hanya mengecek `[ ! -d "$ENSURE_NAMENODE_DIR" ]`
+      # untuk memutuskan format otomatis - BUKAN "apakah sudah diformat". Dengan
+      # named volume, Docker membuat direktori mount-nya (kosong) SEBELUM
+      # container start, jadi `-d` tetap benar dan format ikut terlewat →
+      # NameNode gagal start dengan "InconsistentFSStateException". Diarahkan
+      # ke subdirektori `current/`, yang hanya tercipta SETELAH format
+      # sungguhan (target format sendiri tetap dfs.namenode.name.dir dari
+      # hdfs-site.xml, tidak berubah oleh variabel ini).
+      ENSURE_NAMENODE_DIR: /tmp/hadoop-hadoop/dfs/name/current
+    volumes:
+      # Tanpa ini, `docker compose up` yang mengganti container mana pun di
+      # stack ini (bahkan service tak terkait, mis. `--scale spark-worker=N`)
+      # bisa ikut me-recreate namenode - dan /tmp di dalam container adalah
+      # filesystem kontainer biasa, hilang begitu container diganti. FSImage
+      # jadi kosong lagi (baru diformat ulang) walau blok-nya masih ada.
+      - namenode-data:/tmp/hadoop-hadoop/dfs/name
+    ports:
+      - "${HOST_BIND:-127.0.0.1}:${HDFS_UI_PORT:-9870}:9870"
+    healthcheck:
+      # `localhost`, BUKAN nama host: dfs.namenode.http-address diset ke
+      # "namenode:9870" (lihat docker/hadoop.env), jadi Jetty hanya bind ke IP
+      # yang di-resolve dari hostname itu - bukan 0.0.0.0. curl ke localhost
+      # dari dalam container sendiri terkena connection refused.
+      test: ["CMD-SHELL", "curl -sf http://namenode:9870/jmx?qry=Hadoop:service=NameNode,name=NameNodeStatus | grep -q active"]
+      interval: 10s
+      timeout: 10s
+      retries: 18
+      start_period: 30s
+
+  # 9. YARN + MapReduce
+  resourcemanager:
+    <<: *hadoop-common
+    container_name: novel-resourcemanager
+    hostname: resourcemanager
+    command: ["yarn", "resourcemanager"]
+    ports:
+      - "${HOST_BIND:-127.0.0.1}:${YARN_UI_PORT:-8088}:8088"
+    healthcheck:
+      # Sama seperti NameNode: yarn.resourcemanager.hostname mengikat webapp
+      # ResourceManager ke IP hostname "resourcemanager", bukan 0.0.0.0.
+      test: ["CMD-SHELL", "curl -sf http://resourcemanager:8088/ws/v1/cluster/info | grep -q STARTED"]
+      interval: 10s
+      timeout: 10s
+      retries: 18
+      start_period: 30s
+    depends_on:
+      namenode:
+        condition: service_healthy
+
+  # DataNode + NodeManager DISATUKAN dalam satu container (bukan dua service
+  # terpisah seperti sebelumnya) - inilah syarat data locality MapReduce.
+  #
+  # YARN menjadwalkan task map "data-local" dengan mencocokkan HOSTNAME blok
+  # yang dilaporkan NameNode terhadap hostname NodeManager yang mendaftar ke
+  # ResourceManager. Selama DataNode dan NodeManager berjalan di CONTAINER
+  # BERBEDA (hostname berbeda), kecocokan itu tidak akan pernah terjadi -
+  # setiap task jatuh ke "rack-local" walau blok dan compute sebenarnya ada di
+  # host Docker yang sama (lihat PRC-05 di bigdata_audit.py, temuan sebelum
+  # perubahan ini). Menyatukan keduanya per container membuat kedua daemon
+  # melapor dengan hostname yang SAMA (`worker1`/`worker2`), sehingga YARN bisa
+  # benar-benar menempatkan task pada NodeManager yang disk-nya memegang
+  # blok tersebut.
+  #
+  # Container keluar (exit 1) begitu SALAH SATU daemon mati, lalu `restart:
+  # unless-stopped` menghidupkannya lagi - lebih aman daripada container
+  # "Up" padahal satu prosesnya sudah crash diam-diam di background.
+  #
+  # BUKAN `wait -n` (bash builtin sejak 4.3): image ini CentOS 7 dengan bash
+  # 4.2, jadi dipakai polling PID yang portabel ke versi bash mana pun.
+  worker1:
+    <<: *hadoop-common
+    container_name: novel-worker1
+    hostname: worker1
+    # $$ (bukan $): docker compose menginterpolasi `$VAR` di string manapun di
+    # berkas ini sebagai variabel COMPOSE, bukan variabel shell - tanpa `$$`,
+    # `$DN`/`$NM`/`$!` diam-diam menjadi string kosong sebelum bash sempat melihatnya.
+    command:
+      - bash
+      - -c
+      - |
+        hdfs datanode & DN=$$!
+        yarn nodemanager & NM=$$!
+        while kill -0 "$$DN" 2>/dev/null && kill -0 "$$NM" 2>/dev/null; do sleep 5; done
+        echo "[worker1] salah satu daemon berhenti - keluar"; exit 1
+    volumes:
+      - datanode1-data:/tmp/hadoop-hadoop/dfs/data
+    depends_on:
+      namenode:
+        condition: service_healthy
+      resourcemanager:
+        condition: service_healthy
+
+  worker2:
+    <<: *hadoop-common
+    container_name: novel-worker2
+    hostname: worker2
+    command:
+      - bash
+      - -c
+      - |
+        hdfs datanode & DN=$$!
+        yarn nodemanager & NM=$$!
+        while kill -0 "$$DN" 2>/dev/null && kill -0 "$$NM" 2>/dev/null; do sleep 5; done
+        echo "[worker2] salah satu daemon berhenti - keluar"; exit 1
+    volumes:
+      - datanode2-data:/tmp/hadoop-hadoop/dfs/data
+    depends_on:
+      namenode:
+        condition: service_healthy
+      resourcemanager:
+        condition: service_healthy
+
+  # 10. Klien Hadoop - tempat `hdfs dfs` dan `hadoop jar` dijalankan.
+  #     Idle by default (seperti `pipeline`), repo di-bind-mount supaya
+  #     skrip, mapper/reducer, dan dataset terlihat dari sini.
+  hadoop-client:
+    <<: *hadoop-common
+    container_name: novel-hadoop-client
+    hostname: hadoop-client
+    command: ["tail", "-f", "/dev/null"]
+    volumes:
+      - ./:/opt/project
+    depends_on:
+      namenode:
+        condition: service_healthy
+      resourcemanager:
+        condition: service_healthy
 
 networks:
   bigdata-net:
@@ -195,5 +459,13 @@ networks:
 volumes:
   minio-data:
     name: novel-minio-data
+  tls-certs:
+    name: novel-tls-certs
   ivy-cache:
     name: novel-ivy-cache
+  namenode-data:
+    name: novel-namenode-data
+  datanode1-data:
+    name: novel-datanode1-data
+  datanode2-data:
+    name: novel-datanode2-data

@@ -39,9 +39,7 @@ ARCHITECTURES = networks.ARCHITECTURES
 TorchMultiLabelClassifier = networks.TorchMultiLabelClassifier
 
 
-# ===========================================================================
 # Pembungkus teknik dari literatur
-# ===========================================================================
 class MLSmoteClassifier(BaseEstimator, ClassifierMixin):
     """
     Terapkan MLSMOTE pada matriks fitur sebelum melatih klasifikator dasar.
@@ -96,9 +94,7 @@ class AugmentedClassifier(BaseEstimator, ClassifierMixin):
         return self.estimator_.predict(X)
 
 
-# ===========================================================================
 # Konstruksi model
-# ===========================================================================
 def _linear_head(name: str, params: dict, feature_config: FeatureConfig):
     """Klasifikator One-vs-Rest untuk arsitektur berbasis fitur."""
     if name == "logreg":
@@ -117,6 +113,9 @@ def _linear_head(name: str, params: dict, feature_config: FeatureConfig):
                 class_weight=params.get("class_weight", "balanced"),
                 max_iter=5000,
                 dual="auto",
+                # dual coordinate descent liblinear mengacak urutan sampel;
+                # tanpa seed, skor svm/hybrid bergeser antar run.
+                random_state=RANDOM_STATE,
             ),
             method="sigmoid",
             cv=3,
@@ -183,9 +182,7 @@ def predict_proba_frame(estimator, frame: pd.DataFrame) -> np.ndarray:
     return proba
 
 
-# ===========================================================================
 # Katalog & ruang pencarian
-# ===========================================================================
 MODEL_CATALOG = {
     "logreg": {
         "label": "Logistic Regression",

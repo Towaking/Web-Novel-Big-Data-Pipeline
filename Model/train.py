@@ -89,6 +89,18 @@ def train_genre_only(model_names: list[str] | None, epochs: int | None, upload: 
     # Gabungkan dengan artefak lama agar arsitektur lain tidak hilang.
     previous_path = ARTIFACT_DIR / "genre_models.joblib"
     if previous_path.is_file() and set(requested) != set(genre_models.MODEL_CATALOG):
+        # Model lama hanya boleh dipertahankan bila ruang labelnya SAMA dengan
+        # binarizer baru: zona clean bisa sudah berubah (genre bertambah) sejak
+        # model itu dilatih, dan predict_genres memasangkan probabilitas tiap
+        # model dengan genre_binarizer.classes_ yang baru disimpan.
+        old_binarizer = ARTIFACT_DIR / "genre_binarizer.joblib"
+        old_labels = list(joblib.load(old_binarizer).classes_) if old_binarizer.is_file() else None
+        if old_labels != list(mlb.classes_):
+            raise SystemExit(
+                f"Ruang label berubah ({len(old_labels or [])} -> {len(mlb.classes_)} genre) sejak "
+                "genre_models.joblib terakhir dilatih: model lama tidak bisa digabung. "
+                "Latih ulang semua arsitektur (tanpa --models)."
+            )
         previous = joblib.load(previous_path)
         merged = {**previous, **artifacts}
         logger.info(
@@ -115,7 +127,11 @@ def train_genre_only(model_names: list[str] | None, epochs: int | None, upload: 
     if stale:
         logger.info("Metrik arsitektur usang dibuang: %s", ", ".join(stale))
 
-    head_a["best_model"] = max(head_a["models"], key=lambda k: head_a["models"][k]["f1_macro"])
+    # Pilihan dari skor OOF (set dev), bukan skor uji - sama seperti train_all.
+    head_a["best_model"] = max(
+        head_a["models"],
+        key=lambda k: head_a["models"][k].get("f1_macro_oof", head_a["models"][k]["f1_macro"]),
+    )
     all_metrics["head_a_genre_tagger"] = head_a
     all_metrics.setdefault("stopwords", stopwords)
 

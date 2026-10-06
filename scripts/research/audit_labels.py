@@ -45,12 +45,10 @@ all_tags = pd.Series([t for s in tags for t in s]).value_counts()
 common = all_tags[all_tags >= 30].index.tolist()
 print("tag dipakai (>=30 novel): %d dari %d\n" % (len(common), len(all_tags)))
 
-# ---------------------------------------------------------------------------
 # 1. Aturan implikasi tag -> genre
 #    presisi = P(genre | tag). Lift = presisi / prevalensi genre.
 #    Aturan disimpan hanya bila SANGAT kuat: presisi tinggi DAN lift tinggi,
 #    supaya tidak sekadar menangkap genre yang memang umum (Romance 56%).
-# ---------------------------------------------------------------------------
 has = {t: tags.map(lambda s, t=t: t in s).values for t in common}
 prev = Y.mean(axis=0)
 
@@ -73,12 +71,10 @@ for r in rules[:18]:
     print("  %-32s %-14s %6.2f %6.2f %7d %9d"
           % (r["tag"][:32], r["genre"][:14], r["precision"], r["lift"], r["n_tag"], r["n_missing"]))
 
-# ---------------------------------------------------------------------------
 # 2. Berapa banyak label yang hilang secara keseluruhan?
 #    Satu novel dihitung "kehilangan genre G" bila ia punya >=2 tag berbeda
 #    yang masing-masing mengimplikasikan G. Syarat dua tag dipakai supaya satu
 #    tag menyimpang tidak langsung dianggap bukti.
-# ---------------------------------------------------------------------------
 votes = np.zeros_like(Y, dtype=np.int16)
 for r in rules:
     votes[has[r["tag"]], L[r["genre"]]] += 1
@@ -100,10 +96,8 @@ per_g = pd.DataFrame({
 print("\ngenre dengan label paling banyak hilang:")
 print(per_g.head(12).to_string(index=False))
 
-# ---------------------------------------------------------------------------
 # 3. Apakah "positif palsu" model sebetulnya label hilang?
 #    Memakai probabilitas OOF dari model baseline pada set pengembangan.
-# ---------------------------------------------------------------------------
 print("\n=== 3. Positif palsu model vs bukti tag ===")
 try:
     oof = np.load(ART + "_oof_baseline.npy")

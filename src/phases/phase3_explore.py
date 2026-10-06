@@ -36,6 +36,18 @@ logger = get_logger("phase3.explore")
 #: Tanpa ambang ini, genre berisi 2 novel bisa menempati puncak peringkat rating.
 MIN_GROUP_SUPPORT = 25
 
+#: Kolom novels_clean yang dipakai kueri di modul ini. Diproyeksikan SEBELUM
+#: cache: tabel aslinya membawa sinopsis mentah dan empat salinan korpus teks
+#: (corpus_raw, corpus_clean, tokens, synopsis_clean) yang tidak dipakai Fase 3.
+USED_COLUMNS = (
+    "series_id", "title", "url", "primary_genre", "genre_list", "genre_combo", "n_genres",
+    "tag_list", "n_tags", "type", "type_origin", "language", "year", "decade", "status_coo",
+    "chapter_count", "length_bucket", "is_completed", "rating_score", "rating_votes",
+    "weighted_rating", "is_rated_reliable", "reading_list_count", "popularity_score",
+    "token_count", "synopsis_tokens", "synopsis_word_count", "has_synopsis",
+    "days_per_chapter", "release_pace",
+)
+
 
 def register_views(spark: SparkSession) -> DataFrame:
     """Daftarkan view utama + view hasil explode untuk analisis multi-nilai."""
@@ -43,7 +55,7 @@ def register_views(spark: SparkSession) -> DataFrame:
     clean_uri = settings.minio.s3a_uri(settings.minio.bucket_clean, "novels_clean")
     logger.info("Membaca data bersih dari %s", clean_uri)
 
-    novels = spark.read.parquet(clean_uri).cache()
+    novels = spark.read.parquet(clean_uri).select(*USED_COLUMNS).cache()
     novels.createOrReplaceTempView("novels")
 
     # View turunan dibuat lewat SQL juga, agar seluruh layer analitik
@@ -65,14 +77,6 @@ def register_views(spark: SparkSession) -> DataFrame:
         WHERE size(tag_list) > 0
         """
     )
-    spark.sql(
-        """
-        CREATE OR REPLACE TEMP VIEW novel_tokens AS
-        SELECT series_id, explode(tokens) AS token
-        FROM novels
-        WHERE has_text_signal
-        """
-    )
     # Token sinopsis dipisah dari korpus gabungan: analitik prosa harus
     # mengukur kosakata cerita, bukan frasa katalog yang berasal dari tag.
     spark.sql(
@@ -84,7 +88,7 @@ def register_views(spark: SparkSession) -> DataFrame:
         """
     )
 
-    logger.info("View terdaftar: novels (%s baris), novel_genres, novel_tags, novel_tokens",
+    logger.info("View terdaftar: novels (%s baris), novel_genres, novel_tags, novel_synopsis_tokens",
                 f"{novels.count():,}")
     return novels
 
@@ -96,12 +100,12 @@ def save(df: DataFrame, name: str, preview: int = 8) -> None:
     df.coalesce(1).write.mode("overwrite").parquet(uri)
     logger.info("[%s] tersimpan -> %s", name, uri)
     if preview:
-        df.show(preview, truncate=45)
+        # Cuplikan dibaca dari berkas yang baru ditulis (satu file kecil), bukan
+        # `df.show()` yang menjalankan ulang seluruh kueri (self-join, percentile).
+        df.sparkSession.read.parquet(uri).show(preview, truncate=45)
 
 
-# ===========================================================================
 # ANALITIK 1 — Statistik Deskriptif & Deteksi Outlier
-# ===========================================================================
 def analytic_1_descriptive(spark: SparkSession) -> None:
     logger.info(">> Analitik 1: statistik deskriptif & outlier")
 
@@ -219,9 +223,7 @@ def analytic_1_descriptive(spark: SparkSession) -> None:
     save(outlier_rows, "stat_outlier_novels", preview=5)
 
 
-# ===========================================================================
 # ANALITIK 2 — Analisis Kategorikal (Genre)
-# ===========================================================================
 def analytic_2_categorical(spark: SparkSession) -> None:
     logger.info(">> Analitik 2: frekuensi genre & kombinasi genre")
 
@@ -277,9 +279,7 @@ def analytic_2_categorical(spark: SparkSession) -> None:
     save(genre_pairs, "genre_pairs", preview=5)
 
 
-# ===========================================================================
 # ANALITIK 3 — Korelasi & Bivariate Analysis
-# ===========================================================================
 def analytic_3_bivariate(spark: SparkSession) -> None:
     logger.info(">> Analitik 3: korelasi panjang novel vs rating")
 
@@ -307,7 +307,7 @@ def analytic_3_bivariate(spark: SparkSession) -> None:
 
         UNION ALL
         SELECT 'reading_list_count ~ weighted_rating',
-               ROUND(CORR(reading_list_count, weighted_rating), 4), COUNT(*)
+               ROUND(CORR(reading_list_count, weighted_rating), 4), COUNT(reading_list_count)
         FROM novels
         WHERE is_rated_reliable
 
@@ -367,9 +367,7 @@ def analytic_3_bivariate(spark: SparkSession) -> None:
     save(length_vs_rating, "length_vs_rating")
 
 
-# ===========================================================================
 # ANALITIK 4 — Agregasi Multi-Dimensi
-# ===========================================================================
 def analytic_4_multidim(spark: SparkSession) -> None:
     logger.info(">> Analitik 4: peringkat genre & agregasi multi-dimensi")
 
@@ -411,10 +409,17 @@ def analytic_4_multidim(spark: SparkSession) -> None:
 
     # Agregasi lintas dimensi memakai GROUPING SETS: satu kueri menghasilkan
     # ringkasan per asal, per tipe, dan kombinasinya sekaligus.
+    #
+    # Label 'ALL' hanya untuk baris subtotal (GROUPING() = 1). NULL asli
+    # (sentinel 'Unknown'/'N/A' yang sudah dinormalkan Fase 2) diberi label
+    # 'Unknown' supaya ~70 novel tanpa asal & tipe tidak tampil sebagai
+    # ('ALL', 'ALL') yang terbaca seperti grand total.
     origin_type = spark.sql(
         """
-        SELECT COALESCE(type_origin, 'ALL')  AS type_origin,
-               COALESCE(type, 'ALL')         AS type,
+        SELECT CASE WHEN GROUPING(type_origin) = 1 THEN 'ALL'
+                    ELSE COALESCE(type_origin, 'Unknown') END AS type_origin,
+               CASE WHEN GROUPING(type) = 1 THEN 'ALL'
+                    ELSE COALESCE(type, 'Unknown') END        AS type,
                COUNT(*)                      AS n_novels,
                ROUND(AVG(weighted_rating), 4) AS avg_weighted_rating,
                ROUND(AVG(chapter_count), 1)  AS avg_chapters,
@@ -445,9 +450,7 @@ def analytic_4_multidim(spark: SparkSession) -> None:
     save(decade_trend, "decade_trend", preview=6)
 
 
-# ===========================================================================
 # ANALITIK 5 — Textual Insights
-# ===========================================================================
 def analytic_5_textual(spark: SparkSession) -> None:
     logger.info(">> Analitik 5: metrik teks dari sinopsis & tag")
 
@@ -528,9 +531,16 @@ def analytic_5_textual(spark: SparkSession) -> None:
     # Kata sinopsis yang paling membedakan novel bagus dari novel biasa:
     # membandingkan frekuensi token pada kuartil rating teratas vs terbawah.
     # Ini menjawab "diksi seperti apa yang menyertai cerita yang disukai".
+    #
+    # Dihitung per NOVEL (DISTINCT series_id, token), bukan per kemunculan:
+    # nama tokoh yang diulang 8x dalam satu sinopsis tidak boleh terhitung
+    # sebagai 8 novel, dan ambang dukungan 40 harus berarti 40 novel.
     discriminative = spark.sql(
         """
-        WITH bounds AS (
+        WITH doc_tokens AS (
+            SELECT DISTINCT series_id, token FROM novel_synopsis_tokens
+        ),
+        bounds AS (
             SELECT PERCENTILE_APPROX(weighted_rating, 0.75) AS hi,
                    PERCENTILE_APPROX(weighted_rating, 0.25) AS lo
             FROM novels WHERE is_rated_reliable AND has_synopsis
@@ -550,7 +560,7 @@ def analytic_5_textual(spark: SparkSession) -> None:
                    (SUM(CASE WHEN l.bucket = 'top' THEN 1 ELSE 0 END) + 1.0) /
                    (SUM(CASE WHEN l.bucket = 'bottom' THEN 1 ELSE 0 END) + 1.0), 3
                ) AS top_to_bottom_ratio
-        FROM novel_synopsis_tokens t
+        FROM doc_tokens t
         JOIN labelled l ON t.series_id = l.series_id
         GROUP BY t.token
         HAVING COUNT(*) >= 40
@@ -590,9 +600,7 @@ def analytic_5_textual(spark: SparkSession) -> None:
     save(text_corr, "text_correlation")
 
 
-# ===========================================================================
 # Dataset pendukung visualisasi (Fase 5)
-# ===========================================================================
 def export_viz_dataset(spark: SparkSession) -> None:
     """
     Ekspor tabel per-novel yang ringkas untuk scatter plot & boxplot.

@@ -60,7 +60,7 @@ class ModelRegistry:
     metrics: dict
     stopwords: set[str] = field(default_factory=set)
 
-    # -- Katalog model genre ----------------------------------------------
+    # Katalog model genre
     @property
     def genre_model_names(self) -> list[str]:
         """Nama model genre yang tersedia, terbaik (macro-F1) di urutan pertama."""
@@ -75,7 +75,7 @@ class ModelRegistry:
         """Metadata + metrik satu model genre (untuk ditampilkan di UI)."""
         return self.metrics.get("head_a_genre_tagger", {}).get("models", {}).get(name, {})
 
-    # -- Representasi ------------------------------------------------------
+    # Representasi
     def embed(self, text: str) -> np.ndarray:
         """
         Ubah teks bebas menjadi vektor pada ruang yang sama dengan katalog.
@@ -91,7 +91,7 @@ class ModelRegistry:
         norm = np.linalg.norm(vector)
         return (vector / norm if norm > 0 else vector).astype(np.float32).ravel()
 
-    # -- HEAD A ------------------------------------------------------------
+    # HEAD A
     def predict_genres(
         self,
         text: str,
@@ -136,7 +136,11 @@ class ModelRegistry:
                     # Bila pengguna hanya menempel tag tanpa sinopsis, blok ini
                     # kosong — sama seperti novel tanpa sinopsis saat training.
                     "synopsis_clean": to_corpus(text, self.stopwords),
-                    "tags_clean": (tags or text).lower().replace(",", " "),
+                    # Tag kosong = blok tag kosong, persis novel tanpa tag saat
+                    # training. Mengisinya dengan sinopsis membuat kata prosa
+                    # mengaktifkan blok berbobot tertinggi (1,6) yang tak pernah
+                    # melihat prosa saat dilatih.
+                    "tags_clean": (tags or "").lower().replace(",", " "),
                     "type_origin": type_origin,
                     "type": novel_type,
                     # Kalimat utuh untuk arsitektur hybrid: encoder pralatih
@@ -155,9 +159,15 @@ class ModelRegistry:
         probabilities = probabilities.ravel()
 
         thresholds = np.asarray(bundle["thresholds"], dtype=float) * float(sensitivity)
+        labels = bundle.get("labels", list(self.genre_binarizer.classes_))
+        if not (len(labels) == len(probabilities) == len(thresholds)):
+            raise ModelNotTrainedError(
+                f"Model genre {name!r} punya {len(probabilities)} keluaran tetapi ruang labelnya "
+                f"{len(labels)} genre - artefak tidak konsisten, latih ulang Fase 4."
+            )
         result = pd.DataFrame(
             {
-                "genre": self.genre_binarizer.classes_,
+                "genre": labels,
                 "probability": probabilities,
                 "threshold": thresholds,
             }
@@ -172,7 +182,7 @@ class ModelRegistry:
             .reset_index(drop=True)
         )
 
-    # -- HEAD B ------------------------------------------------------------
+    # HEAD B
     def recommend_by_vector(self, vector: np.ndarray, k: int = 10, exclude_idx: int | None = None) -> pd.DataFrame:
         """Cari k novel termirip. Embedding sudah ternormalisasi -> dot = cosine."""
         scores = self.embeddings @ vector
@@ -195,7 +205,7 @@ class ModelRegistry:
         idx = int(matches[0])
         return self.recommend_by_vector(self.embeddings[idx], k=k, exclude_idx=idx)
 
-    # -- HEAD C ------------------------------------------------------------
+    # HEAD C
     def assign_cluster(self, text: str) -> dict:
         """Tentukan arketipe cerita untuk teks masukan."""
         cluster_id = int(self.kmeans.predict(self.embed(text).reshape(1, -1))[0])
@@ -203,7 +213,7 @@ class ModelRegistry:
         profile = next((p for p in profiles if p["cluster_id"] == cluster_id), {})
         return {"cluster_id": cluster_id, "profile": profile}
 
-    # -- HEAD D ------------------------------------------------------------
+    # HEAD D
     def _median_days_per_chapter(self) -> float:
         """Median kecepatan rilis katalog; 30 hari bila kolomnya belum ada.
 
@@ -225,6 +235,7 @@ class ModelRegistry:
         type_origin: str = "CN",
         novel_type: str = "Web Novel",
         days_per_chapter: float | None = None,
+        tags: str = "",
     ) -> float:
         """
         Estimasi rating berbasis konten.
@@ -237,13 +248,19 @@ class ModelRegistry:
             raise ModelNotTrainedError("Regressor rating tidak tersedia pada artefak ini.")
 
         feature_names: list[str] = self.metrics.get("numeric_features", [])
-        tokens = tokenize(text, self.stopwords)
+        # token_count saat training dihitung atas judul + sinopsis + tag.
+        tokens = tokenize(f"{text} {tags}", self.stopwords)
         catalog_median_chapters = float(self.catalog["chapter_count"].median())
         catalog_median_year = float(pd.to_numeric(self.catalog["year"], errors="coerce").median())
 
         values = {
             "log_chapters": float(np.log1p(chapter_count if chapter_count else catalog_median_chapters)),
-            "n_tags": float(len([t for t in text.split(",") if t.strip()])),
+            # Jumlah tag dari field tag; tanpa tag dipakai median katalog.
+            # Menghitung koma di teks bebas menghasilkan jumlah klausa, bukan tag.
+            "n_tags": float(
+                len([t for t in tags.split(",") if t.strip()]) if tags.strip()
+                else self.catalog["n_tags"].median()
+            ),
             "token_count": float(len(tokens)),
             "year": float(year if year else catalog_median_year),
             "is_completed": float(bool(is_completed)),
@@ -287,6 +304,9 @@ def load_registry(artifact_dir: Path = ARTIFACT_DIR) -> ModelRegistry:
 
     metrics = json.loads((artifact_dir / "metrics.json").read_text(encoding="utf-8"))
     regressor_path = artifact_dir / "rating_regressor.joblib"
+    # Regressor hanya dimuat bila run Fase 4 yang menulis metrics.json memang
+    # melatihnya - berkas sisa run lama dilatih di ruang embedding lama.
+    head_d_trained = metrics.get("head_d_rating_estimator", {}).get("trained", True)
 
     registry = ModelRegistry(
         vectorizer=joblib.load(artifact_dir / "vectorizer.joblib"),
@@ -294,12 +314,20 @@ def load_registry(artifact_dir: Path = ARTIFACT_DIR) -> ModelRegistry:
         genre_models=joblib.load(artifact_dir / "genre_models.joblib"),
         genre_binarizer=joblib.load(artifact_dir / "genre_binarizer.joblib"),
         kmeans=joblib.load(artifact_dir / "kmeans.joblib"),
-        rating_regressor=joblib.load(regressor_path) if regressor_path.is_file() else None,
+        rating_regressor=joblib.load(regressor_path) if head_d_trained and regressor_path.is_file() else None,
         catalog=pd.read_parquet(artifact_dir / "catalog.parquet"),
         embeddings=np.load(artifact_dir / "embeddings.npy"),
         metrics=metrics,
         stopwords=set(metrics.get("stopwords", [])),
     )
+    # Artefak dari dua run berbeda tidak melempar error apa pun - rekomendasi
+    # dan klaster jadi salah diam-diam. Cek bentuk yang harus saling cocok.
+    n_components = getattr(registry.svd, "n_components", registry.embeddings.shape[1])
+    if registry.embeddings.shape[0] != len(registry.catalog) or registry.embeddings.shape[1] != n_components:
+        raise ModelNotTrainedError(
+            f"Artefak tidak konsisten: embeddings {registry.embeddings.shape}, katalog "
+            f"{len(registry.catalog):,} baris, SVD {n_components} komponen - jalankan ulang Fase 4."
+        )
     logger.info(
         "Registry dimuat: %s novel, embedding %s, %d genre, %d model genre.",
         f"{len(registry.catalog):,}",

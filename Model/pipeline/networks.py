@@ -56,9 +56,7 @@ PAD, UNK = 0, 1
 RANDOM_STATE = 42
 
 
-# ===========================================================================
 # Tokenisasi & kosakata
-# ===========================================================================
 class Vocabulary:
     """
     Kosakata dibangun HANYA dari data latih tiap fold.
@@ -100,9 +98,7 @@ class Vocabulary:
         return len(self.stoi)
 
 
-# ===========================================================================
 # Arsitektur — BiLSTM dengan self-attention
-# ===========================================================================
 class BiLSTMAttentionNet(nn.Module):
     """
     BiLSTM + additive self-attention.
@@ -145,9 +141,7 @@ class BiLSTMAttentionNet(nn.Module):
 ARCHITECTURES = {"bilstm": BiLSTMAttentionNet}
 
 
-# ===========================================================================
 # Pembungkus scikit-learn
-# ===========================================================================
 class TorchMultiLabelClassifier(BaseEstimator, ClassifierMixin):
     """
     Adaptor agar model PyTorch dapat dipakai seperti estimator scikit-learn.
@@ -179,7 +173,9 @@ class TorchMultiLabelClassifier(BaseEstimator, ClassifierMixin):
         loss: str = "bce",
         pos_weight_cap: float = 12.0,
         random_state: int = RANDOM_STATE,
-        **arch_kwargs,
+        hidden: int = 128,
+        attn_dim: int = 128,
+        dropout: float = 0.4,
     ):
         self.arch = arch
         self.max_len = max_len
@@ -194,9 +190,15 @@ class TorchMultiLabelClassifier(BaseEstimator, ClassifierMixin):
         self.loss = loss
         self.pos_weight_cap = pos_weight_cap
         self.random_state = random_state
-        self.arch_kwargs = arch_kwargs
+        # Parameter arsitektur eksplisit, bukan **kwargs: `sklearn.clone()`
+        # (dipakai cross_val_predict per fold) hanya menyalin parameter yang
+        # tercantum di signature __init__. Lewat **kwargs, fold CV diam-diam
+        # memakai arsitektur default sementara model akhir memakai nilai grid.
+        self.hidden = hidden
+        self.attn_dim = attn_dim
+        self.dropout = dropout
 
-    # -- Persiapan masukan ------------------------------------------------
+    # Persiapan masukan
     def _to_text(self, frame: pd.DataFrame) -> list[str]:
         """
         Gabungkan korpus, tag, dan metadata menjadi satu untai token.
@@ -250,7 +252,9 @@ class TorchMultiLabelClassifier(BaseEstimator, ClassifierMixin):
             vocab_size=len(self.vocab_),
             n_labels=n_labels,
             embed_dim=self.embed_dim,
-            **self.arch_kwargs,
+            hidden=self.hidden,
+            attn_dim=self.attn_dim,
+            dropout=self.dropout,
         )
 
 
@@ -269,7 +273,7 @@ class TorchMultiLabelClassifier(BaseEstimator, ClassifierMixin):
             return AsymmetricLoss()
         return nn.BCEWithLogitsLoss(pos_weight=self._compute_pos_weight(y_train))
 
-    # -- Pelatihan --------------------------------------------------------
+    # Pelatihan
     def fit(self, X: pd.DataFrame, y: np.ndarray) -> "TorchMultiLabelClassifier":
         torch.manual_seed(self.random_state)
         rng = np.random.default_rng(self.random_state)
@@ -337,7 +341,7 @@ class TorchMultiLabelClassifier(BaseEstimator, ClassifierMixin):
         self.network_.eval()
         return self
 
-    # -- Inferensi --------------------------------------------------------
+    # Inferensi
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
         encoded = self.vocab_.encode(self._to_text(X), self.max_len)
         outputs = []
