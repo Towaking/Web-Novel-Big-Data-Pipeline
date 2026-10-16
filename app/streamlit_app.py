@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import html
 import io
+import json
 import os
 import re
 
@@ -27,6 +28,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import pyarrow as pa
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -39,6 +41,9 @@ from src.common.model_registry import (
 )
 from src.common.storage import get_s3_client, list_objects, read_parquet_dir
 from src.common.title_generator import TitleGenerator, description_keywords
+
+# Arrow's default jemalloc pool keeps freed buffers: the Dataset page held ~400 MB more RAM with it.
+pa.set_memory_pool(pa.system_memory_pool())
 
 st.set_page_config(
     page_title="NovelLens: Novel Catalogue Intelligence",
@@ -256,7 +261,72 @@ st.markdown(
       }}
       .nl-idea .rank {{color: {MUTED}; font-size: .74rem; font-weight: 640; margin-bottom: .25rem;}}
       .nl-idea .t {{font-size: 1.06rem; font-weight: 700; line-height: 1.35;}}
-      .nl-idea .src {{color: {MUTED}; font-size: .78rem; line-height: 1.5; margin-top: .45rem;}}
+
+      /* --- Lead number, facts, findings, answers ----------------------- */
+      .nl-lead .num {{font-size: 3.4rem; font-weight: 760; letter-spacing: -.03em; line-height: 1; color: #F1EDFF;}}
+      .nl-lead .lbl {{color: {MUTED}; font-size: .95rem; line-height: 1.5; margin-top: .6rem; max-width: 34ch;}}
+      .nl-facts {{display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: .9rem 1.6rem; margin: 0;}}
+      .nl-facts div {{border-top: 1px solid rgba(255,255,255,.08); padding-top: .55rem;}}
+      .nl-facts dt {{color: {MUTED}; font-size: .78rem; font-weight: 600;}}
+      .nl-facts dd {{margin: .15rem 0 0; font-size: 1rem; font-weight: 620; color: #E6E9EF;}}
+      .nl-findings {{list-style: none; margin: 0; padding: 0; counter-reset: f;}}
+      .nl-findings li {{display: grid; grid-template-columns: 7.5rem minmax(0, 1fr); gap: 1.2rem; align-items: baseline;
+                       padding: .85rem 0; border-bottom: 1px solid rgba(255,255,255,.07);}}
+      .nl-findings .fig {{font-size: 1.5rem; font-weight: 720; color: #F1EDFF; font-variant-numeric: tabular-nums;}}
+      .nl-findings .txt {{font-size: .97rem; line-height: 1.55; color: #D5DAE5; max-width: 70ch;}}
+      .nl-answer {{font-size: 1.02rem; line-height: 1.55; color: #D5DAE5; max-width: 80ch; margin: .2rem 0 1rem;}}
+      .nl-group {{font-size: .8rem; font-weight: 700; color: {MUTED}; margin-bottom: .35rem;}}
+      .nl-prose {{max-width: 72ch; line-height: 1.65; color: #D5DAE5;}}
+      .nl-prose p {{margin: 0 0 .8rem;}}
+      .nl-prose.small {{font-size: .86rem; color: {MUTED};}}
+      .nl-limits {{margin: 0; padding-left: 1.1rem; line-height: 1.6; color: #D5DAE5;}}
+      .nl-limits li {{margin-bottom: .45rem;}}
+      /* Governance checklist: the status word leads each row, colour repeats it. */
+      .nl-pillar {{display: flex; justify-content: space-between; align-items: baseline; margin: .4rem 0 .3rem;
+                  font-weight: 700; font-size: 1.02rem;}}
+      .nl-pillar .tally {{color: {MUTED}; font-size: .8rem; font-weight: 500;}}
+      .nl-checks {{list-style: none; margin: 0 0 1.4rem; padding: 0;}}
+      .nl-checks li {{display: grid; grid-template-columns: 4.6rem minmax(0, 1fr); gap: .8rem; padding: .6rem 0;
+                     border-top: 1px solid rgba(255,255,255,.07);}}
+      .nl-checks .st {{font-size: .78rem; font-weight: 700; padding-top: .1rem;}}
+      .nl-checks .st-pass .st {{color: #5EEAD4;}}
+      .nl-checks .st-info .st {{color: {MUTED};}}
+      .nl-checks .st-warning .st {{color: #FFB454;}}
+      .nl-checks .st-fail .st {{color: #FF9BBB;}}
+      .nl-checks .nm {{font-weight: 600; font-size: .9rem;}}
+      .nl-checks .nm code {{font-size: .72rem; color: {MUTED}; background: none; padding: 0;}}
+      .nl-checks .ev, .nl-checks .fu {{color: {MUTED}; font-size: .82rem; line-height: 1.5; margin-top: .15rem;}}
+      @media (max-width: 640px) {{
+        .nl-findings li {{grid-template-columns: 1fr; gap: .2rem;}}
+        .nl-lead .num {{font-size: 2.6rem;}}
+      }}
+
+      /* --- Overview: metric band and summary panels ------------------- */
+      .nl-kpis {{display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-radius: 14px;
+                border: 1px solid rgba(255,255,255,.085); background: rgba(255,255,255,.03);}}
+      .nl-kpis > div {{padding: 1rem 1.2rem; border-left: 1px solid rgba(255,255,255,.07);}}
+      .nl-kpis > div:first-child {{border-left: none;}}
+      .nl-kpis .k {{color: {MUTED}; font-size: .78rem; font-weight: 600;}}
+      .nl-kpis .v {{font-size: 1.65rem; font-weight: 720; letter-spacing: -.02em; color: #F1EDFF; margin-top: .2rem;}}
+      .nl-kpis .s {{color: {MUTED}; font-size: .78rem; margin-top: .15rem;}}
+      .nl-kpis .up {{color: #5EEAD4; font-weight: 650;}}
+      @media (max-width: 900px) {{
+        .nl-kpis {{grid-template-columns: repeat(2, minmax(0, 1fr));}}
+        .nl-kpis > div {{border-left: none; border-top: 1px solid rgba(255,255,255,.07);}}
+        .nl-kpis > div:nth-child(-n+2) {{border-top: none;}}
+      }}
+      [data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"]:has(.nl-panel-h) {{
+        border-color: rgba(255,255,255,.085); border-radius: 14px; background: rgba(255,255,255,.02);
+      }}
+      .nl-panel-h {{display: flex; justify-content: space-between; align-items: baseline; gap: .8rem; flex-wrap: wrap;}}
+      .nl-panel-h span:first-child {{font-weight: 700; font-size: .98rem;}}
+      .nl-panel-h .note {{color: {MUTED}; font-size: .76rem;}}
+      /* Panel links read as a footer link, not a second card inside the card. */
+      [data-testid="stVerticalBlockBorderWrapper"]:has(.nl-panel-h) [data-testid="stPageLink"] a {{
+        border: none; background: none; padding: .2rem 0; min-height: 36px; width: auto;
+      }}
+      [data-testid="stVerticalBlockBorderWrapper"]:has(.nl-panel-h) [data-testid="stPageLink"] a p {{color: #C9BDFF;}}
+      .nl-rank.compact li {{grid-template-columns: 1.4rem minmax(0, 1fr) auto; padding: .55rem .1rem;}}
 
       /* --- Ranked list (overview) --------------------------------------- */
       .nl-rank {{list-style: none; margin: 0; padding: 0;}}
@@ -375,6 +445,16 @@ def _registry(stamp: int):
 def get_registry():
     """Model registry, reloaded when Phase 4 writes a new set of artefacts."""
     return _registry(_artifact_stamp())
+
+
+@st.cache_data(show_spinner=False, max_entries=1)
+def _model_metrics(stamp: int) -> dict:
+    return json.loads((ARTIFACT_DIR / "metrics.json").read_text(encoding="utf-8"))
+
+
+def model_metrics() -> dict:
+    """metrics.json alone, for pages that report scores without loading ~1 GB of models."""
+    return _model_metrics(_artifact_stamp())
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
@@ -585,94 +665,163 @@ def novel_card(row: pd.Series, show_similarity: bool = True, similarity_label: s
     )
 
 
+def facts_html(items: list[tuple[str, str]]) -> str:
+    """A definition list of label/value pairs, for facts that support one lead number."""
+    return '<dl class="nl-facts">' + "".join(
+        f"<div><dt>{html.escape(k)}</dt><dd>{v}</dd></div>" for k, v in items
+    ) + "</dl>"
+
+
+def findings_html(items: list[tuple[str, str]]) -> str:
+    """Numbered findings: the supporting figure, then the sentence that says what it means."""
+    return '<ol class="nl-findings">' + "".join(
+        f'<li><span class="fig">{html.escape(fig)}</span><span class="txt">{text}</span></li>'
+        for fig, text in items
+    ) + "</ol>"
+
+
+def answer(text: str) -> None:
+    """The one-sentence answer a section gives, above the chart that backs it."""
+    st.markdown(f'<p class="nl-answer">{text}</p>', unsafe_allow_html=True)
+
+
 # PAGE — Overview
+def kpi_strip_html(items: list[tuple[str, str, str]]) -> str:
+    """One band of headline metrics: label, value, and what the value is measured against."""
+    return '<div class="nl-kpis">' + "".join(
+        f'<div><div class="k">{html.escape(k)}</div><div class="v">{v}</div><div class="s">{s}</div></div>'
+        for k, v, s in items
+    ) + "</div>"
+
+
+def panel_head(title: str, note: str = "") -> None:
+    st.markdown(f'<div class="nl-panel-h"><span>{html.escape(title)}</span>'
+                f'<span class="note">{html.escape(note)}</span></div>', unsafe_allow_html=True)
+
+
+def mini_fig(fig, height: int):
+    """Panel-sized chart: no legend, tight margins, readable ticks."""
+    fig = style_fig(fig, height)
+    fig.update_layout(showlegend=False, margin=dict(l=0, r=8, t=4, b=0), font=dict(size=12))
+    return fig
+
+
 def page_overview() -> None:
     viz = load_table("viz_novels")
-    hero(
-        "NovelLens",
-        f"Catalogue intelligence for {len(viz):,} web novel titles: what people read, "
-        "what they rate highly, and which titles are worth recommending.",
-    )
-
+    hero("Overview", "The NovelUpdates catalogue at a glance. Every panel summarises one page; "
+                     "follow its link to dig in.")
     reliable = viz[viz["is_rated_reliable"] == True]  # noqa: E712
-    genres = load_table("genre_frequency")
-    ranking = load_table("genre_ranking").sort_values("avg_weighted_rating", ascending=False)
+    years = viz["year"].dropna().astype(int)
+    last_full = last_full_year(years)
+    per_year = years.value_counts()
+    cur, prev = int(per_year.get(last_full, 0)), int(per_year.get(last_full - 1, 0))
+    growth = f'<span class="up">▲ {(cur - prev) / prev:+.0%}</span> vs {last_full - 1}' if prev else ""
 
-    cols = st.columns(4)
-    card(cols[0], "Titles in catalogue", f"{len(viz):,}", f"{viz['primary_genre'].nunique()} primary genres")
-    card(cols[1], "Average rating", f"{viz['weighted_rating'].mean():.2f}",
-         f"{len(reliable):,} titles with an established score")
-    card(cols[2], "Median length", f"{viz['chapter_count'].median():,.0f} chapters",
-         f"longest {viz['chapter_count'].max():,.0f} chapters")
-    top_freq = genres.nlargest(1, "n_novels").iloc[0]
-    card(cols[3], "Top genre", top_freq["genre"],
-         f"{top_freq['pct_of_catalog']:.0f}% of the catalogue")
-
-    st.write("")
-    st.subheader("What you need to know")
-
-    corr = load_table("correlation_metrics").set_index("pair")
-    richness = load_table("text_richness_vs_rating").sort_values("text_richness")
-    top_genre, longest = ranking.iloc[0], ranking.sort_values("avg_chapters", ascending=False).iloc[0]
-    r_len = corr.loc["chapter_count ~ weighted_rating", "pearson_r"]
-    gain = richness.iloc[-1]["avg_weighted_rating"] - richness.iloc[0]["avg_weighted_rating"]
-
-    strength = "barely" if abs(r_len) < 0.05 else "slightly" if abs(r_len) < 0.2 else "clearly"
-    direction = "negatively" if r_len < 0 else "positively"
-    insight_cols = st.columns(3)
-    card(
-        insight_cols[0], "Length ≠ acclaim" if r_len < 0.2 else "Longer rates higher", f"r = {r_len}",
-        f"Chapter count correlates {strength} {direction} with rating."
-        + (" Adding more chapters does not buy reader approval." if r_len < 0.2 else ""),
-    )
-    card(
-        insight_cols[1], "Best-rated genre", top_genre["genre"],
-        f"Averages {top_genre['avg_weighted_rating']:.2f} across {int(top_genre['n_novels'])} titles. "
-        f"Longest: {longest['genre']} (~{longest['avg_chapters']:,.0f} chapters).",
-    )
-    card(
-        insight_cols[2], "Rich synopses win" if gain > 0 else "Synopsis length barely matters",
-        f"{gain:+.2f} points",
-        f"Titles with 300+ word synopses score {'higher' if gain > 0 else 'no higher'} than those "
-        "under 50 words.",
-    )
+    st.markdown(kpi_strip_html([
+        ("Titles", f"{len(viz):,}", "in the catalogue"),
+        ("Rated", f"{len(reliable):,}", f"{len(reliable) / len(viz):.0%} have 10+ votes"),
+        ("Average rating", f"{reliable['weighted_rating'].mean():.2f}", "weighted, out of 5"),
+        ("Median length", f"{viz['chapter_count'].median():,.0f}", "chapters"),
+        (f"Released in {last_full}", f"{cur:,}", growth),
+    ]), unsafe_allow_html=True)
 
     st.write("")
-    st.subheader("Go deeper")
-    links = st.columns(5)
-    for col, (key, text) in zip(links, [
-        ("trends", "Trends by year"), ("genre", "One genre in depth"),
-        ("tags", "Story element gaps"), ("lookup", "Look up a title"),
-        ("studio", "Analyse a story"),
-    ]):
-        with col:
-            st.page_link(PAGE[key], label=text)
-
-    st.write("")
-    left, right = st.columns([1, 1], gap="large")
-
+    left, right = st.columns([3, 2], gap="medium")
     with left:
-        st.subheader("Most common genres")
-        subset = genres.nlargest(10, "n_novels").sort_values("n_novels")
-        fig = px.bar(
-            subset, x="n_novels", y="genre", orientation="h",
-            color="avg_weighted_rating", color_continuous_scale=SCALE,
-            labels={"n_novels": "Number of titles", "genre": "", "avg_weighted_rating": "Rating"},
-        )
-        fig.update_coloraxes(colorbar_title_text="Rating")
-        st.plotly_chart(style_fig(fig, 380), use_container_width=True)
-
+        with st.container(border=True):
+            panel_head("New titles per release year", f"{last_full - 14} to {last_full}")
+            span = per_year.sort_index().loc[last_full - 14:last_full].reset_index()
+            span.columns = ["year", "titles"]
+            fig = px.bar(span, x="year", y="titles", labels={"year": "", "titles": "Titles"})
+            fig.update_traces(marker_color=BRAND, hovertemplate="%{x}: %{y:,} titles<extra></extra>")
+            fig.update_yaxes(title_text="")
+            st.plotly_chart(mini_fig(fig, 230), use_container_width=True, config={"displayModeBar": False})
+            st.page_link(PAGE["trends"], label="Market trends", icon=PAGE_ICON["trends"])
     with right:
-        st.subheader("Highest reader ratings")
-        top = reliable.nlargest(8, "weighted_rating")
-        items = "".join(
-            f'<li><span class="r">{i}</span><span class="t" title="{html.escape(str(r.title), quote=True)}">'
-            f'{html.escape(str(r.title))}</span><span class="v">{r.weighted_rating:.2f}</span>'
-            f'<span class="n">{int(r.rating_votes):,} votes</span></li>'
-            for i, r in enumerate(top.itertuples(index=False), 1)
-        )
-        st.markdown(f'<ol class="nl-rank">{items}</ol>', unsafe_allow_html=True)
-        st.caption("Weighted rating, titles with 10+ votes.")
+        with st.container(border=True):
+            panel_head("Where titles come from", "share of the catalogue")
+            share = origin_group(viz["type_origin"].dropna()).value_counts(normalize=True).mul(100)
+            share = share.reindex(list(ORIGIN_COLORS)).dropna()
+            share = share[share >= 0.5].reset_index()
+            share.columns = ["origin", "pct"]
+            fig = px.bar(share, x="pct", y="origin", orientation="h", color="origin",
+                         color_discrete_map=ORIGIN_COLORS, text=share["pct"].map("{:.0f}%".format),
+                         labels={"pct": "% of titles", "origin": ""})
+            fig.update_traces(textposition="outside", cliponaxis=False, hovertemplate="%{y}: %{x:.1f}%<extra></extra>")
+            fig.update_yaxes(categoryorder="array", categoryarray=share["origin"].tolist()[::-1])
+            fig.update_xaxes(range=[0, share["pct"].max() * 1.2], visible=False)
+            st.plotly_chart(mini_fig(fig, 230), use_container_width=True, config={"displayModeBar": False})
+            st.page_link(PAGE["creators"], label="Authors & publishers", icon=PAGE_ICON["creators"])
+
+    a, b, c = st.columns(3, gap="medium")
+    with a:
+        with st.container(border=True):
+            panel_head("Most common genres", "titles carrying the genre")
+            genres = load_table("genre_frequency").nlargest(8, "n_novels").sort_values("n_novels")
+            fig = px.bar(genres, x="n_novels", y="genre", orientation="h",
+                         text=genres["pct_of_catalog"].map("{:.0f}%".format), labels={"n_novels": "", "genre": ""})
+            fig.update_traces(marker_color=BRAND, textposition="outside", cliponaxis=False,
+                              hovertemplate="%{y}: %{x:,} titles<extra></extra>")
+            fig.update_xaxes(range=[0, genres["n_novels"].max() * 1.25], visible=False)
+            st.plotly_chart(mini_fig(fig, 260), use_container_width=True, config={"displayModeBar": False})
+            st.page_link(PAGE["genre"], label="Genre explorer", icon=PAGE_ICON["genre"])
+    with b:
+        with st.container(border=True):
+            mean = reliable["weighted_rating"].mean()
+            panel_head("How readers rate", f"titles with 10+ votes · average {mean:.2f}")
+            fig = px.histogram(reliable, x="weighted_rating", nbins=40, labels={"weighted_rating": "Weighted rating"})
+            fig.update_traces(marker_color=BRAND, hovertemplate="%{x}: %{y:,} titles<extra></extra>")
+            fig.add_vline(x=mean, line=dict(color="#FFB454", width=2))
+            fig.update_yaxes(visible=False)
+            st.plotly_chart(mini_fig(fig, 260), use_container_width=True, config={"displayModeBar": False})
+            st.page_link(PAGE["analytics"], label="Catalogue analytics", icon=PAGE_ICON["analytics"])
+    with c:
+        with st.container(border=True):
+            panel_head("Highest rated", "weighted rating, 10+ votes")
+            top = reliable.nlargest(5, "weighted_rating")
+            ranked = "".join(
+                f'<li><span class="r">{i}</span><span class="t" title="{html.escape(str(r.title), quote=True)}">'
+                f'{html.escape(str(r.title))}</span><span class="v">{r.weighted_rating:.2f}</span></li>'
+                for i, r in enumerate(top.itertuples(index=False), 1)
+            )
+            st.markdown(f'<ol class="nl-rank compact">{ranked}</ol>', unsafe_allow_html=True)
+            st.page_link(PAGE["lookup"], label="Title lookup", icon=PAGE_ICON["lookup"])
+
+    left, right = st.columns([3, 2], gap="medium")
+    with left:
+        with st.container(border=True):
+            panel_head("What stands out")
+            corr = load_table("correlation_metrics").set_index("pair")
+            ranking = load_table("genre_ranking").sort_values("avg_weighted_rating", ascending=False)
+            richness = load_table("text_richness_vs_rating").sort_values("text_richness")
+            gain = richness.iloc[-1]["avg_weighted_rating"] - richness.iloc[0]["avg_weighted_rating"]
+            st.markdown(findings_html([
+                (f"{corr.loc['chapter_count ~ weighted_rating', 'pearson_r']:+.2f}",
+                 "correlation between length and rating: more chapters do not earn better scores."),
+                (f"{ranking.iloc[0]['avg_weighted_rating']:.2f}",
+                 f"for <b>{html.escape(ranking.iloc[0]['genre'])}</b>, the best-rated genre "
+                 f"({int(ranking.iloc[0]['n_novels']):,} titles)."),
+                (f"{gain:+.2f}", "rating gap between the richest and the shortest synopses."),
+            ]), unsafe_allow_html=True)
+            st.page_link(PAGE["tags"], label="Story elements", icon=PAGE_ICON["tags"])
+    with right:
+        with st.container(border=True):
+            panel_head("Data health")
+            try:
+                audit = load_lake("governance/audit_report")
+                tally = audit["status"].map(STATUS_LABEL).fillna(audit["status"]).value_counts()
+                checks = (f"{int(tally.get('Pass', 0))} pass · {int(tally.get('Warning', 0))} warning · "
+                          f"{int(tally.get('Fail', 0))} fail")
+            except DataUnavailable:
+                checks = "audit not run yet"
+            stamp = pd.to_datetime(lake_version(), errors="coerce", utc=True)
+            st.markdown(facts_html([
+                ("Governance audit", checks),
+                ("Synopsis coverage", f"{viz['has_synopsis'].mean():.1%} of titles"),
+                ("Missing chapter count", f"{viz['chapter_count'].isna().mean():.0%} of titles"),
+                ("Data refreshed", f"{stamp:%d %b %Y, %H:%M} UTC" if pd.notna(stamp) else "unknown"),
+            ]), unsafe_allow_html=True)
+            st.page_link(PAGE["governance"], label="Quality & governance", icon=PAGE_ICON["governance"])
 
 
 # PAGE — Catalogue Analytics
@@ -690,21 +839,27 @@ def page_analytics() -> None:
 
     # Genres
     with tab_genre:
-        genres = load_table("genre_frequency")
+        # Bar length counts every title; colour and "best liked" use titles with 10+ votes, like every ranking.
+        genres = load_table("genre_frequency").drop(columns="avg_weighted_rating").merge(
+            load_table("genre_ranking")[["genre", "avg_weighted_rating"]], on="genre", how="left")
+        common, liked = genres.nlargest(1, "n_novels").iloc[0], genres.nlargest(1, "avg_weighted_rating").iloc[0]
+        answer(f"<b>{html.escape(common['genre'])}</b> is the most common genre ({common['pct_of_catalog']:.0f}% of titles); "
+               f"<b>{html.escape(liked['genre'])}</b> is the best liked ({liked['avg_weighted_rating']:.2f} on average "
+               "across its titles with 10+ votes).")
         top_n = st.slider("Genres shown", 5, min(30, len(genres)), 15)
         subset = genres.nlargest(top_n, "n_novels").sort_values("n_novels")
 
         fig = px.bar(
             subset, x="n_novels", y="genre", orientation="h",
             color="avg_weighted_rating", color_continuous_scale=SCALE,
-            labels={"n_novels": "Number of titles", "genre": "", "avg_weighted_rating": "Rating"},
+            labels={"n_novels": "Number of titles", "genre": "", "avg_weighted_rating": "Rating (10+ votes)"},
             hover_data={"pct_of_catalog": ":.1f", "avg_chapters": ":.0f"},
         )
         fig.update_coloraxes(colorbar_title_text="Rating")
         st.plotly_chart(style_fig(fig, max(360, 26 * top_n)), use_container_width=True)
         st.markdown(
-            '<div class="nl-note">Bar length = number of titles, colour = average rating. '
-            "The most common genre is not necessarily the best-liked one, so compare both.</div>",
+            '<div class="nl-note">Bar length = number of titles, colour = average rating of the titles with 10+ '
+            "votes. The most common genre is not necessarily the best-liked one, so compare both.</div>",
             unsafe_allow_html=True,
         )
 
@@ -721,19 +876,25 @@ def page_analytics() -> None:
                 column_config={"Rating": st.column_config.NumberColumn(format="%.2f")},
             )
         with col2:
-            st.markdown("**Rating spread by genre**")
+            st.markdown("**How widely ratings spread inside each genre**")
             top_genres = viz["primary_genre"].value_counts().head(8).index.tolist()
             box_df = viz[viz["primary_genre"].isin(top_genres) & viz["weighted_rating"].notna()]
+            # One colour: the genre is already on the axis, a hue per box would only repeat it.
             fig = px.box(
-                box_df, x="primary_genre", y="weighted_rating", color="primary_genre",
-                points=False, color_discrete_sequence=SEQUENCE,
+                box_df, x="primary_genre", y="weighted_rating", points=False,
                 labels={"primary_genre": "", "weighted_rating": "Rating"},
             )
-            fig.update_layout(showlegend=False)
+            fig.update_traces(marker_color=BRAND, line_color=FOCUS, fillcolor="rgba(124,92,255,.25)")
             st.plotly_chart(style_fig(fig, 430), use_container_width=True)
 
     # Length & rating
     with tab_length:
+        lengths = load_table("length_vs_rating").sort_values("length_bucket")
+        hi_b = lengths.loc[lengths["avg_weighted_rating"].idxmax()]
+        lo_b = lengths.loc[lengths["avg_weighted_rating"].idxmin()]
+        answer(f"Shorter runs rate a little higher: {en_label(hi_b['length_bucket']).lower()} titles average "
+               f"{hi_b['avg_weighted_rating']:.2f}, {en_label(lo_b['length_bucket']).lower()} ones "
+               f"{lo_b['avg_weighted_rating']:.2f}.")
         col_a, col_b = st.columns([3, 2])
         available = sorted(viz["primary_genre"].dropna().unique().tolist())
         default = load_table("genre_frequency").nlargest(5, "n_novels")["genre"].tolist()
@@ -805,39 +966,58 @@ def page_analytics() -> None:
     # Story language
     with tab_text:
         tokens = load_table("top_tokens")
-        st.markdown("**Vocabulary that dominates the synopses**")
-        col_wc, col_list = st.columns([3, 1], gap="large")
-        with col_wc:
-            st.image(render_wordcloud(tokens), use_column_width=True)
-        with col_list:
-            st.dataframe(
-                tokens.head(14)[["token", "n_novels"]].rename(
-                    columns={"token": "Word", "n_novels": "Titles"}),
-                hide_index=True, use_container_width=True, height=420,
-            )
-        st.markdown(
-            '<div class="nl-note">Taken from the original synopses (not the catalogue tags), '
-            "after stopword removal.</div>",
-            unsafe_allow_html=True,
-        )
+        richness = load_table("text_richness_vs_rating").sort_values("text_richness")
+        gain = richness.iloc[-1]["avg_weighted_rating"] - richness.iloc[0]["avg_weighted_rating"]
+        answer(f"Longer synopses go with better ratings ({gain:+.2f} from the shortest to the longest group), "
+               "and a handful of words appear far more often in the best-rated stories.")
+        col1, col2 = st.columns(2, gap="large")
+        with col1:
+            st.markdown("**Words that set top-rated synopses apart**")
+            try:
+                disc = load_table("synopsis_discriminative_tokens")
+                disc = disc.assign(**{c: pd.to_numeric(disc[c], errors="coerce")
+                                      for c in ("top_to_bottom_ratio", "n_top", "n_bottom")})
+                disc = disc.nlargest(15, "top_to_bottom_ratio")
+            except DataUnavailable:
+                disc = pd.DataFrame()
+            if disc.empty:
+                st.info("The word comparison has not been computed yet. Run Phase 3 of the pipeline.")
+            else:
+                disc = disc.sort_values("top_to_bottom_ratio")
+                fig = px.bar(disc, x="top_to_bottom_ratio", y="token", orientation="h",
+                             text=disc["top_to_bottom_ratio"].map("×{:.1f}".format),
+                             hover_data={"n_top": ":,", "n_bottom": ":,"},
+                             labels={"top_to_bottom_ratio": "Times more common in the top-rated quarter",
+                                     "token": "", "n_top": "Top-rated synopses", "n_bottom": "Bottom-rated synopses"})
+                fig.update_traces(marker_color=ACCENT, textposition="outside", cliponaxis=False)
+                fig.update_xaxes(range=[0, disc["top_to_bottom_ratio"].max() * 1.2])
+                st.plotly_chart(style_fig(fig, 440), use_container_width=True)
+        with col2:
+            st.markdown("**The most common words in synopses**")
+            common = tokens.head(15).sort_values("n_novels")
+            fig = px.bar(common, x="n_novels", y="token", orientation="h",
+                         labels={"n_novels": "Synopses using the word", "token": ""})
+            fig.update_traces(marker_color=BRAND)
+            st.plotly_chart(style_fig(fig, 440), use_container_width=True)
+        st.caption("Words after stopword removal, from the synopses rather than the catalogue tags.")
 
         st.write("")
         col1, col2 = st.columns(2, gap="large")
         with col1:
-            st.markdown("**Synopsis length vs rating**")
-            richness = load_table("text_richness_vs_rating").sort_values("text_richness")
+            st.markdown("**Does a longer synopsis go with a better rating?**")
             fig = dot_rating_chart(richness, "text_richness", height=380)
             fig.update_layout(xaxis_tickangle=-18)
             st.plotly_chart(fig, use_container_width=True)
         with col2:
-            st.markdown("**Best-rated story elements**")
+            st.markdown("**Which story elements readers rate highest**")
             tags = load_table("best_rated_tags").head(14).sort_values("avg_weighted_rating")
             st.plotly_chart(dot_rating_chart(tags, "tag", horizontal=True, height=380, translate=False),
                             use_container_width=True)
 
     # Market map
     with tab_market:
-        st.markdown("**Average rating by genre × country of origin**")
+        answer("The same genre can rate differently by origin: read across a row to compare countries.")
+        st.markdown("**Average rating by genre and country of origin**")
         matrix = load_table("genre_origin_matrix")
         pivot = matrix.pivot(index="genre", columns="type_origin", values="avg_weighted_rating")
         pivot = pivot.loc[pivot.mean(axis=1).sort_values(ascending=False).index]
@@ -856,10 +1036,12 @@ def page_analytics() -> None:
         col1, col2 = st.columns(2, gap="large")
         with col1:
             st.markdown("**Average rating by decade**")
-            decade = load_table("decade_trend")
+            # Decades with a handful of titles (12 from the 1960s) would anchor the line on noise.
+            decade = load_table("decade_trend").query("n_novels >= 50")
             fig = px.line(
                 decade, x="decade", y="avg_weighted_rating", markers=True,
-                labels={"decade": "", "avg_weighted_rating": "Rating"},
+                hover_data={"n_novels": ":,"},
+                labels={"decade": "", "avg_weighted_rating": "Rating", "n_novels": "Titles"},
             )
             fig.update_traces(line=dict(color=BRAND, width=3), marker=dict(size=10, color=ACCENT))
             st.plotly_chart(style_fig(fig, 340), use_container_width=True)
@@ -932,11 +1114,21 @@ MODEL_TEXT = {
                "A linear model over TF-IDF features. The fastest, with the best-calibrated probabilities."),
     "svm": ("Margin-based · sparse TF-IDF",
             "Maximises the margin between classes; probabilities come from Platt calibration."),
-    "hybrid": ("Sparse + dense · pretrained encoder",
-               "TF-IDF plus pretrained sentence embeddings (BGE): phrases typical of a genre and "
-               "paraphrases that use different words."),
-    "bilstm": ("Deep learning · bidirectional recurrent",
-               "Reads the synopsis as a sequence in both directions; attention weights the words that decide the genre."),
+    "rf": ("Tree ensemble · chi-square selected TF-IDF",
+           "One forest of decision trees votes on every genre at once, using only the terms most tied to "
+           "a genre. It can pick up word combinations a linear model cannot, but scores lower than the "
+           "linear models on this catalogue."),
+    "ensemble": ("Weighted log-odds average · linear + trees",
+                 "Combines the Linear SVM and Random Forest in log-odds space, with weights picked on "
+                 "cross-validated predictions. It gets the most genres right and ranks the top three "
+                 "about as well as the SVM alone."),
+}
+
+
+#: Short names for running text; the radio labels come from metrics.json.
+MODEL_NAMES = {
+    "logreg": "Logistic Regression", "svm": "Linear SVM", "rf": "Random Forest",
+    "ensemble": "SVM + Random Forest ensemble",
 }
 
 
@@ -1022,8 +1214,6 @@ def _studio_story(registry) -> None:
     if submitted:
         text = f"{synopsis} {tags}".strip()
         try:
-            # The hybrid model loads its sentence encoder on first use (about five
-            # seconds, once per session); later calls take ~50 ms.
             with st.spinner("Reading the story…"):
                 genres = registry.predict_genres(
                     synopsis, tags=tags, model=choice, top_k=10,
@@ -1116,38 +1306,42 @@ def _title_ideas(registry, story: dict, predicted: list[str]) -> None:
                          help="Chinese titles run short and formulaic; Japanese light-novel titles are often whole sentences.")
     more = c2.button("New ideas", use_container_width=True, key="title_go")
 
-    signature = (story["synopsis"], style)
+    signature = (story["synopsis"], story["tags"], style)
     if more or st.session_state.get("title_signature") != signature or "title_ideas" not in st.session_state:
         if st.session_state.get("title_signature") != signature:
             st.session_state["title_signature"], st.session_state["title_seen"] = signature, set()
         st.session_state["title_batch"] = st.session_state.get("title_batch", 0) + 1
-        similarity = pd.Series(registry.embeddings @ registry.embed(f"{story['synopsis']} {story['tags']}"),
-                               index=registry.catalog["series_id"].to_numpy())
-        weights = generator.title_weights(
-            generator.catalog["series_id"].map(similarity).to_numpy(dtype=float),
-            predicted[:3], None if style == "Any" else style,
-        )
-        keywords = description_keywords(story["synopsis"]) | description_keywords(" ".join(predicted[:3]))
-        ideas = generator.generate(weights, keywords, n=8, seed=st.session_state["title_batch"],
-                                   exclude=st.session_state.get("title_seen", set()))
-        st.session_state["title_seen"] = st.session_state.get("title_seen", set()) | {i.title.lower() for i in ideas}
-        st.session_state["title_ideas"] = ideas
+        st.session_state["title_ideas"] = _make_title_ideas(registry, generator, story, predicted, style)
 
     ideas = st.session_state["title_ideas"]
     if not ideas:
         st.info("No new title survived the filters. Add more story detail or switch the title style.")
         return
     cols = st.columns(2, gap="medium")
-    for i, idea in enumerate(ideas):
-        sources = " · ".join(html.escape(s if len(s) <= 70 else s[:67].rstrip() + "…") for s in idea.sources[:2])
-        cols[i % 2].markdown(
-            f'<div class="nl-idea"><div class="t">{html.escape(idea.title)}</div>'
-            f'<div class="src">Phrasing from: {sources}</div></div>',
-            unsafe_allow_html=True,
-        )
-    st.caption("Every three-word run comes from a catalogue title; the combinations are new, and ideas that copy "
-               "a title or a phrase only one title uses are filtered out. No language model is involved, so check "
-               "that a title is free before using it.")
+    for i, title in enumerate(ideas):
+        cols[i % 2].markdown(f'<div class="nl-idea"><div class="t">{html.escape(title)}</div></div>',
+                             unsafe_allow_html=True)
+    st.caption("Built from title patterns that recur in the catalogue, filled with words from your story that "
+               "play the same part in real titles. Titles that already exist are removed. Check that a title is "
+               "free before you use it.")
+
+
+def _make_title_ideas(registry, generator, story: dict, predicted: list[str], style: str) -> list[str]:
+    seen = st.session_state.get("title_seen", set())
+    similarity = pd.Series(registry.embeddings @ registry.embed(f"{story['synopsis']} {story['tags']}"),
+                           index=registry.catalog["series_id"].to_numpy())
+    weights = generator.title_weights(
+        generator.catalog["series_id"].map(similarity).to_numpy(dtype=float),
+        predicted[:3], None if style == "Any" else style,
+    )
+    keywords = (description_keywords(story["synopsis"]) | description_keywords(story["tags"])
+                | description_keywords(" ".join(predicted[:3])))
+    titles = [i.title for i in generator.generate(
+        weights, keywords, n=8, seed=st.session_state["title_batch"], exclude=seen,
+        story=f"{story['synopsis']}. {story['tags']}",
+    )]
+    st.session_state["title_seen"] = seen | {t.lower() for t in titles}
+    return titles
 
 
 def _studio_similar(registry) -> None:
@@ -1170,132 +1364,105 @@ def _studio_similar(registry) -> None:
 def page_method() -> None:
     hero(
         "Methodology & limitations",
-        "How the numbers in this app are computed, how accurate the models are, "
-        "and where the output should not be taken at face value.",
+        "How the numbers in this app are computed, how accurate the models are, and where "
+        "the output should not be taken at face value.",
     )
-
     viz = load_table("viz_novels")
-    synopsis_share = viz["has_synopsis"].mean() if "has_synopsis" in viz else None
-    chapter_gap = viz["chapter_count"].isna().mean()
-    st.subheader("Where the data comes from")
-    st.markdown(
-        f"""
-The catalogue holds **{len(viz):,} translated web novel titles** with their metadata,
-reader ratings, and synopses. Before use, the data goes through cleaning:
-
-- Missing values disguised as the number `0` or the text `"Unknown"` / `"N/A"` are
-  restored to genuinely empty. {chapter_gap:.0%} of titles have no known chapter count;
-  counting them as 0 would drag the average length down by the same share.
-- Ratings are shown as a **weighted rating**: a title with 2 votes is not
-  treated like one with 500. Every ranking in this app uses only titles with at
-  least 10 votes.
-""".rstrip()
-        + "\n"
-        + (
-            f"- **{synopsis_share:.1%}** of titles carry a synopsis, which is what the "
-            "models read.\n"
-            if synopsis_share is not None
-            else ""
+    reliable_share = (viz["is_rated_reliable"] == True).mean()  # noqa: E712
+    left, right = st.columns([3, 2], gap="large")
+    with left:
+        st.subheader("The data")
+        st.markdown(
+            f'<div class="nl-prose"><p>The catalogue holds <b>{len(viz):,} translated web novels</b> '
+            "scraped from NovelUpdates: metadata, reader ratings and synopses, consolidated into a "
+            "single source file before any cleaning.</p>"
+            "<p>Cleaning restores missing values that the site disguises as <code>0</code>, "
+            "<code>Unknown</code> or <code>N/A</code> to genuinely empty. "
+            f"{viz['chapter_count'].isna().mean():.0%} of titles have no known chapter count; "
+            "counting them as zero would pull the average length down by the same share.</p>"
+            "<p>Ratings appear as a <b>Bayesian weighted rating</b>, so a title with 2 votes is not "
+            "treated like one with 500, and every ranking uses only titles with at least 10 votes "
+            f"({reliable_share:.0%} of the catalogue).</p></div>",
+            unsafe_allow_html=True,
         )
-    )
+    with right:
+        st.subheader("Limitations")
+        cn_share = (viz["type_origin"] == "CN").mean()
+        st.markdown(
+            '<ul class="nl-limits">'
+            "<li>The models read the description, not the manuscript: a weak synopsis is judged weakly.</li>"
+            "<li>Recommendations rest on content similarity, not writing quality.</li>"
+            f"<li>Chinese titles make up {cn_share:.0%} of the catalogue, so other origins are modelled less well.</li>"
+            "<li>Ratings come from one reader community, not the general public.</li>"
+            "<li>Archetypes overlap; they are not hard categories.</li></ul>",
+            unsafe_allow_html=True,
+        )
 
     if not artifacts_available():
         return
-
-    metrics = get_registry().metrics
+    metrics = model_metrics()
     head_a, head_b = metrics["head_a_genre_tagger"], metrics["head_b_recommender"]
     head_c, head_d = metrics["head_c_clustering"], metrics["head_d_rating_estimator"]
 
-    st.subheader("Genre tagging model performance")
-    st.markdown(
-        "Every model is trained and tested on the same split "
-        f"({head_a['n_train']:,} titles for development · {head_a['n_test']:,} for testing), "
-        "so the comparison is fair. Hyperparameters and each genre's decision threshold "
-        "are chosen by cross-validation inside the development set. The test set is "
-        "touched once, at the very end, so the numbers below are not inflated."
+    st.write("")
+    st.subheader("How well the genre models tag")
+    answer(
+        f"{head_a['n_train']:,} titles for development and {head_a['n_test']:,} held out for testing, the same "
+        "split for every model. Settings and each genre's threshold come from cross-validation inside the "
+        "development set; the test set is used once, at the end."
     )
-
-    rows = []
     best = head_a.get("best_model")
-    for name, entry in head_a["models"].items():
-        rows.append({
-            "Model": entry.get("label", name) + (" (selected)" if name == best else ""),
-            "Approach": model_text(name, entry)[0],
-            "Macro F1 (cross-validation)": entry.get("f1_macro_oof"),
-            "Macro F1": entry["f1_macro"],
-            "Micro F1": entry["f1_micro"],
-            "P@3": entry.get("precision_at_3"),
-            "Hamming loss": entry.get("hamming_loss"),
-            "Macro F1 at a 0.5 threshold": entry["f1_macro_fixed_threshold"],
-        })
-    table = pd.DataFrame(rows).sort_values("Macro F1 (cross-validation)", ascending=False)
+    rows = [{
+        "Model": entry.get("label", name) + (" (selected)" if name == best else ""),
+        "Macro F1, CV": entry.get("f1_macro_oof"),
+        "Macro F1, test": entry["f1_macro"],
+        "Micro F1, test": entry["f1_micro"],
+        "Top-3 precision": entry.get("precision_at_3"),
+        "Macro F1 at 0.5": entry["f1_macro_fixed_threshold"],
+    } for name, entry in head_a["models"].items()]
     st.dataframe(
-        table, hide_index=True, use_container_width=True,
+        pd.DataFrame(rows).sort_values("Macro F1, CV", ascending=False),
+        hide_index=True, use_container_width=True,
         column_config={
-            "Macro F1 (cross-validation)": st.column_config.NumberColumn(format="%.3f"),
-            "Macro F1": st.column_config.ProgressColumn("Macro F1", min_value=0, max_value=1, format="%.3f"),
-            "Micro F1": st.column_config.ProgressColumn("Micro F1", min_value=0, max_value=1, format="%.3f"),
-            "P@3": st.column_config.NumberColumn("P@3", format="%.3f"),
-            "Hamming loss": st.column_config.NumberColumn("Hamming loss", format="%.4f"),
+            **{c: st.column_config.NumberColumn(format="%.3f") for c in
+               ("Macro F1, test", "Micro F1, test", "Top-3 precision", "Macro F1 at 0.5")},
+            "Macro F1, CV": st.column_config.NumberColumn(
+                format="%.3f", help="3-fold cross-validation inside the development set"),
         },
     )
     st.markdown(
-        """
-<div class="nl-note">
-<b>Macro F1</b> weights every genre equally, so it drops sharply when rare genres are
-ignored. The model is selected on its cross-validated macro F1 inside the development set;
-the test-set column then confirms the choice without having influenced it. <b>Micro F1</b> is dominated by common
-genres. <b>P@3</b> measures how accurate the top three guesses are without depending on a
-threshold at all, which is closest to what users actually see. <b>Hamming loss</b> is the
-share of binary decisions that are wrong (lower is better). The last column shows the same
-model scored with a uniform 0.5 threshold; the gap is the contribution of per-genre
-threshold tuning.
-</div>
-        """,
+        '<div class="nl-prose small"><p><b>Macro F1</b> weights every genre equally, so it falls when rare '
+        "genres are missed; the model is chosen on its cross-validated value. <b>Micro F1</b> is dominated by "
+        "common genres. <b>Top-3 precision</b> scores the three most likely genres without any threshold, "
+        "closest to what a user sees. The last column uses a flat 0.5 threshold; the gap to the test column "
+        "is what per-genre thresholds add.</p>"
+        "<p>Every model here is classical machine learning (TF-IDF features, no neural network). The "
+        "ensemble averages the Linear SVM and Random Forest predictions in log-odds space: the forest is "
+        "weaker alone but wrong in different places, so the blend gets more genres right. A plain average "
+        "of probabilities lowered top-3 precision; the log-odds blend keeps it level with the SVM. "
+        "Words that NovelUpdates censors "
+        "(for example mu*der) are restored before training, so a synopsis typed in full reads the same way "
+        "as the catalogue. Regularisation and the weight of each text block were tuned with Bayesian "
+        "search (TPE). A hybrid model with pretrained sentence embeddings and a BiLSTM were trained earlier "
+        "and are left out of the app on purpose. "
+        "References: TF-IDF + linear baselines from genre-from-synopsis research; "
+        "per-genre thresholds after Hoang (2018); multi-output random forests after Madjarov et al. (2012); "
+        "TPE after Bergstra et al. (2011); logarithmic pooling after Genest et al. (1984).</p></div>",
         unsafe_allow_html=True,
     )
 
-    st.markdown(
-        """
-**Architecture references.** The two feature-based models (TF-IDF + linear) follow the
-baselines common in genre-classification-from-synopsis research. The hybrid model adds
-pretrained sentence embeddings (BGE, Xiao et al., 2023; Sentence-BERT, Reimers &
-Gurevych, 2019) next to the TF-IDF block. The sequence model replicates a BiLSTM with self-attention
-(Ertugrul & Karagoz, 2018; Zhou et al., 2016), with multi-label handling via weighted
-per-label *binary cross-entropy* (Liu et al., SIGIR 2017). Per-genre probability threshold
-tuning follows Hoang (2018).
-        """
-    )
-
     st.write("")
-    st.subheader("Other features")
-    cols = st.columns(3)
-    card(cols[0], "Recommendations", f"{head_b['genre_overlap_at_k']:.0%}",
-         f"of {head_b['k']} suggestions share a genre with the reference title")
-    card(cols[1], "Archetypes", f"{head_c['best_k']} clusters",
-         "cluster count chosen automatically by silhouette score")
-    if head_d.get("trained"):
-        card(cols[2], "Rating estimate", f"±{head_d['mae']:.2f}",
-             f"{head_d['improvement_over_baseline_pct']:.0f}% better than guessing the average")
-    else:
-        card(cols[2], "Rating estimate", "n/a", "not trained on this data")
-
-    st.write("")
-    cn_share = (viz["type_origin"] == "CN").mean()
-    st.subheader("Limitations worth remembering")
-    st.markdown(
-        f"""
-- The models read the **description**, not the manuscript. A novel with a poor
-  synopsis will be judged poorly even if the story itself is good.
-- Recommendations rest purely on content similarity; two titles on the same theme
-  count as similar even when their writing quality differs sharply.
-- The catalogue is dominated by Chinese novels ({cn_share:.0%}), so accuracy on English or
-  Japanese titles tends to be lower.
-- Ratings come from a single translated-fiction reader community, not the general
-  population.
-- Archetypes are overlapping groups, not hard partitions.
-        """
-    )
+    st.subheader("The other three models")
+    items = [
+        ("Recommendations", f"{head_b['genre_overlap_at_k']:.0%} of the top {head_b['k']} suggestions share "
+                            "a genre with the title they were asked about"),
+        ("Archetypes", f"{head_c['best_k']} clusters, the count chosen by silhouette score"),
+        ("Rating estimate",
+         f"typical error ±{head_d['mae']:.2f} on a 1 to 5 scale, "
+         f"{head_d['improvement_over_baseline_pct']:.0f}% better than always guessing the average"
+         if head_d.get("trained") else "not trained on this data"),
+    ]
+    st.markdown(facts_html(items), unsafe_allow_html=True)
 
 
 # Data platform pages
@@ -1652,8 +1819,8 @@ def star_schema_svg(tables: dict[str, list[str]], counts: dict[str, int]) -> str
 def page_warehouse() -> None:
     hero(
         "Data warehouse",
-        "The cleaned catalogue modelled as a star schema. Pick a dimension and a measure "
-        "below to slice, dice, roll up, drill down or pivot it.",
+        "The cleaned catalogue as a star schema. Ask it a question by choosing what to break "
+        "down by and what to measure; the model behind it is one tab over.",
     )
 
     with st.spinner("Loading the star schema tables…"):
@@ -1665,206 +1832,210 @@ def page_warehouse() -> None:
                          "bridge_novel_author")
         }
 
-    columns = {name: list(load_lake(f"model/{name}").columns) for name in counts}
-    st.markdown(star_schema_svg(columns, counts), unsafe_allow_html=True)
-    st.caption("Read it like Power BI's model view: 1 and * mark each side of a relationship, the "
-               "arrow is the filter direction, and a double arrow means filters cross both ways. "
-               "The fact-to-bridge links need that, or a genre, tag or author filter could not "
-               "reach the fact table. Σ marks the summable measures; dashed cards are bridge tables.")
-    notes, measures = st.columns([2, 3], gap="large")
-    with notes:
-        st.markdown("**Why this shape**")
+    tab_query, tab_model = st.tabs(["Ask the warehouse", "How it is modelled"])
+    # The model tab is drawn first: the query tab returns early on empty results.
+    with tab_model:
+        columns = {name: list(load_lake(f"model/{name}").columns) for name in counts}
+        st.markdown(star_schema_svg(columns, counts), unsafe_allow_html=True)
+        st.caption("Read it like Power BI's model view: 1 and * mark each side of a relationship, the "
+                   "arrow is the filter direction, and a double arrow means filters cross both ways. "
+                   "The fact-to-bridge links need that, or a genre, tag or author filter could not "
+                   "reach the fact table. Σ marks the summable measures; dashed cards are bridge tables.")
+        notes, measures = st.columns([2, 3], gap="large")
+        with notes:
+            st.markdown("**Why this shape**")
+            st.markdown(
+                f"The fact table holds **one row per title** ({counts['fact_novel']:,} rows). "
+                "Genres, tags and authors are many-valued, so they hang off bridge tables "
+                "instead of being copied into the fact. A title with five genres keeps its "
+                "vote count once, not five times. Single-valued dimensions sit on the left, "
+                "many-valued ones reach the fact through a bridge on the right."
+            )
+        with measures:
+            st.dataframe(
+                pd.DataFrame([
+                    ("chapter_count", "Additive", "SUM, AVG"),
+                    ("rating_votes", "Additive", "SUM"),
+                    ("reading_list_count", "Additive", "SUM"),
+                    ("weighted_rating", "Non-additive", "AVG only"),
+                    ("rating_score", "Non-additive", "AVG only"),
+                    ("days_per_chapter", "Non-additive", "AVG, median"),
+                ], columns=["Measure in fact_novel", "Type", "Valid aggregation"]),
+                hide_index=True, use_container_width=True,
+            )
+
+    with tab_query:
+
+        c1, c2, c3 = st.columns(3)
+        rows = c1.selectbox("Break down by", list(DIMENSIONS), index=0)
+        col_options = ["Nothing (single breakdown)"] + [d for d in DIMENSIONS if d != rows]
+        cols_pick = c2.selectbox("Compare across", col_options, index=0)
+        cols = None if cols_pick == col_options[0] else cols_pick
+        measure = c3.selectbox("Measure", list(MEASURES), index=3)
+
+        origins = star["type_origin"].value_counts().index.tolist()
+        formats = star["type"].value_counts().index.tolist()
+        with st.expander("Slice and dice filters", expanded=False):
+            f1, f2, f3 = st.columns(3)
+            pick_origin = f1.multiselect("Country of origin", origins, placeholder="All origins")
+            pick_format = f2.multiselect("Format", formats, placeholder="All formats")
+            pick_status = f3.radio("Status", ["All", "Completed", "Ongoing"], horizontal=True)
+            g1, g2 = st.columns([1, 2])
+            use_years = g1.checkbox("Limit release year", help="Titles with no known year drop out when this is on.")
+            valid_years = star["year"].dropna().astype(int)
+            years = None
+            if use_years:
+                years = g2.slider("Release year", int(valid_years.min()), int(valid_years.max()),
+                                  (2015, int(valid_years.max())))
+            reliable = g1.checkbox("Only titles with 10+ votes")
+
+        filters = {
+            "origin": pick_origin, "format": pick_format,
+            "status": None if pick_status == "All" else pick_status,
+            "years": years, "reliable": reliable,
+        }
+        view = star
+        if pick_origin:
+            view = view[view["type_origin"].isin(pick_origin)]
+        if pick_format:
+            view = view[view["type"].isin(pick_format)]
+        if filters["status"]:
+            view = view[view["status"] == filters["status"]]
+        if years:
+            view = view[view["year"].between(*years)]
+        if reliable:
+            view = view[view["is_rated_reliable"] == True]  # noqa: E712
+
+        if cols and DIMENSIONS[rows]["kind"] == "bridge" and DIMENSIONS[cols]["kind"] == "bridge":
+            st.info("Genre and tag are both many-valued. Compare one of them against a "
+                    "single-valued dimension such as origin or decade.")
+            return
+        if view.empty:
+            st.info("No titles match these filters. Clear a filter or widen the year range.")
+            return
+
+        frame = dimension_frame(view, rows)
+        if cols:
+            frame = frame.merge(dimension_frame(view, cols), on="series_id")
+        dims = [rows] + ([cols] if cols else [])
+        result = aggregate(frame, view, dims, measure)
+        if result.empty:
+            st.info(f"No group reaches {MIN_GROUP} titles with a value for this measure. "
+                    "Loosen the filters or choose a coarser breakdown.")
+            return
+
+        ordinal = DIMENSIONS[rows].get("ordinal", False)
+        drill = None
+        if rows == "Decade" and not cols:
+            decades = sorted(result["Decade"].unique().tolist(), reverse=True)
+            drill_pick = st.selectbox(
+                "Drill down into a decade", ["Stay at decade level"] + [str(d) for d in decades]
+            )
+            drill = None if drill_pick == "Stay at decade level" else int(drill_pick)
+
+        ops = olap_operations(rows, cols, filters, drill is not None)
+        # .at keeps each column's dtype; a row Series would turn decade 1970 into 1970.0.
+        best_idx = result["measure"].idxmax()
+        label = " / ".join(str(result.at[best_idx, d]) for d in dims)
         st.markdown(
-            f"The fact table holds **one row per title** ({counts['fact_novel']:,} rows). "
-            "Genres, tags and authors are many-valued, so they hang off bridge tables "
-            "instead of being copied into the fact. A title with five genres keeps its "
-            "vote count once, not five times. Single-valued dimensions sit on the left, "
-            "many-valued ones reach the fact through a bridge on the right."
+            f"#### Highest {measure.lower()}: {label} "
+            f"({fmt_value(result.at[best_idx, 'measure'], measure)})"
         )
-    with measures:
-        st.dataframe(
-            pd.DataFrame([
-                ("chapter_count", "Additive", "SUM, AVG"),
-                ("rating_votes", "Additive", "SUM"),
-                ("reading_list_count", "Additive", "SUM"),
-                ("weighted_rating", "Non-additive", "AVG only"),
-                ("rating_score", "Non-additive", "AVG only"),
-                ("days_per_chapter", "Non-additive", "AVG, median"),
-            ], columns=["Measure in fact_novel", "Type", "Valid aggregation"]),
-            hide_index=True, use_container_width=True,
+        st.caption(
+            f"{view['series_id'].nunique():,} titles in view"
+            + (" · operations: " + ", ".join(ops) if ops else "")
         )
 
-    st.divider()
-    st.subheader("Ask the warehouse")
-
-    c1, c2, c3 = st.columns(3)
-    rows = c1.selectbox("Break down by", list(DIMENSIONS), index=0)
-    col_options = ["Nothing (single breakdown)"] + [d for d in DIMENSIONS if d != rows]
-    cols_pick = c2.selectbox("Compare across", col_options, index=0)
-    cols = None if cols_pick == col_options[0] else cols_pick
-    measure = c3.selectbox("Measure", list(MEASURES), index=3)
-
-    origins = star["type_origin"].value_counts().index.tolist()
-    formats = star["type"].value_counts().index.tolist()
-    with st.expander("Slice and dice filters", expanded=False):
-        f1, f2, f3 = st.columns(3)
-        pick_origin = f1.multiselect("Country of origin", origins, placeholder="All origins")
-        pick_format = f2.multiselect("Format", formats, placeholder="All formats")
-        pick_status = f3.radio("Status", ["All", "Completed", "Ongoing"], horizontal=True)
-        g1, g2 = st.columns([1, 2])
-        use_years = g1.checkbox("Limit release year", help="Titles with no known year drop out when this is on.")
-        valid_years = star["year"].dropna().astype(int)
-        years = None
-        if use_years:
-            years = g2.slider("Release year", int(valid_years.min()), int(valid_years.max()),
-                              (2015, int(valid_years.max())))
-        reliable = g1.checkbox("Only titles with 10+ votes")
-
-    filters = {
-        "origin": pick_origin, "format": pick_format,
-        "status": None if pick_status == "All" else pick_status,
-        "years": years, "reliable": reliable,
-    }
-    view = star
-    if pick_origin:
-        view = view[view["type_origin"].isin(pick_origin)]
-    if pick_format:
-        view = view[view["type"].isin(pick_format)]
-    if filters["status"]:
-        view = view[view["status"] == filters["status"]]
-    if years:
-        view = view[view["year"].between(*years)]
-    if reliable:
-        view = view[view["is_rated_reliable"] == True]  # noqa: E712
-
-    if cols and DIMENSIONS[rows]["kind"] == "bridge" and DIMENSIONS[cols]["kind"] == "bridge":
-        st.info("Genre and tag are both many-valued. Compare one of them against a "
-                "single-valued dimension such as origin or decade.")
-        return
-    if view.empty:
-        st.info("No titles match these filters. Clear a filter or widen the year range.")
-        return
-
-    frame = dimension_frame(view, rows)
-    if cols:
-        frame = frame.merge(dimension_frame(view, cols), on="series_id")
-    dims = [rows] + ([cols] if cols else [])
-    result = aggregate(frame, view, dims, measure)
-    if result.empty:
-        st.info(f"No group reaches {MIN_GROUP} titles with a value for this measure. "
-                "Loosen the filters or choose a coarser breakdown.")
-        return
-
-    ordinal = DIMENSIONS[rows].get("ordinal", False)
-    drill = None
-    if rows == "Decade" and not cols:
-        decades = sorted(result["Decade"].unique().tolist(), reverse=True)
-        drill_pick = st.selectbox(
-            "Drill down into a decade", ["Stay at decade level"] + [str(d) for d in decades]
-        )
-        drill = None if drill_pick == "Stay at decade level" else int(drill_pick)
-
-    ops = olap_operations(rows, cols, filters, drill is not None)
-    # .at keeps each column's dtype; a row Series would turn decade 1970 into 1970.0.
-    best_idx = result["measure"].idxmax()
-    label = " / ".join(str(result.at[best_idx, d]) for d in dims)
-    st.markdown(
-        f"#### Highest {measure.lower()}: {label} "
-        f"({fmt_value(result.at[best_idx, 'measure'], measure)})"
-    )
-    st.caption(
-        f"{view['series_id'].nunique():,} titles in view"
-        + (" · operations: " + ", ".join(ops) if ops else "")
-    )
-
-    if cols:
-        pivot = result.pivot(index=rows, columns=cols, values="measure")
-        if ordinal:
-            pivot = pivot.sort_index()
+        if cols:
+            pivot = result.pivot(index=rows, columns=cols, values="measure")
+            if ordinal:
+                pivot = pivot.sort_index()
+            else:
+                pivot = pivot.loc[pivot.mean(axis=1).sort_values(ascending=False).index]
+            if DIMENSIONS[cols].get("ordinal"):
+                pivot = pivot[sorted(pivot.columns)]
+            pivot.columns = [str(c) for c in pivot.columns]
+            pivot.index = [str(i) for i in pivot.index]
+            text_fmt = ".2f" if measure == "Average weighted rating" else ".3s"
+            fig = px.imshow(pivot, color_continuous_scale=SCALE, aspect="auto", text_auto=text_fmt,
+                            labels=dict(x=cols, y="", color=measure))
+            st.plotly_chart(style_fig(fig, max(360, 28 * len(pivot))), use_container_width=True)
+            st.caption("Empty cells: the combination does not exist or, for averages, has fewer "
+                       f"than {MIN_GROUP} titles.")
         else:
-            pivot = pivot.loc[pivot.mean(axis=1).sort_values(ascending=False).index]
-        if DIMENSIONS[cols].get("ordinal"):
-            pivot = pivot[sorted(pivot.columns)]
-        pivot.columns = [str(c) for c in pivot.columns]
-        pivot.index = [str(i) for i in pivot.index]
-        text_fmt = ".2f" if measure == "Average weighted rating" else ".3s"
-        fig = px.imshow(pivot, color_continuous_scale=SCALE, aspect="auto", text_auto=text_fmt,
-                        labels=dict(x=cols, y="", color=measure))
-        st.plotly_chart(style_fig(fig, max(360, 28 * len(pivot))), use_container_width=True)
-        st.caption("Empty cells: the combination does not exist or, for averages, has fewer "
-                   f"than {MIN_GROUP} titles.")
-    else:
-        plot = result.copy()
-        plot[rows] = plot[rows].astype(str)
-        top_label = str(result.at[best_idx, rows])
-        plot["lead"] = np.where(plot[rows] == top_label, "Highest", "Other")
-        # Averages differ by tenths, so they get dots on a zoomed axis (see
-        # dot_rating_chart); additive measures keep bars that start at zero.
-        chart = px.bar if MEASURES[measure]["additive"] else px.scatter
-        if ordinal:
-            plot = plot.sort_values(rows)
-            fig = chart(plot, x=rows, y="measure", color="lead",
-                         color_discrete_map={"Highest": ACCENT, "Other": BRAND},
-                         hover_data={"n_titles": ":,", "lead": False},
-                         labels={"measure": measure, rows: "", "n_titles": "Titles"})
-            height = 380
-        else:
-            plot = plot.sort_values("measure")
-            fig = chart(plot, x="measure", y=rows, color="lead",
-                        color_discrete_map={"Highest": ACCENT, "Other": BRAND},
-                        hover_data={"n_titles": ":,", "lead": False},
-                        labels={"measure": measure, rows: "", "n_titles": "Titles"},
-                        **({"orientation": "h"} if MEASURES[measure]["additive"] else {}))
-            height = max(340, 24 * len(plot))
-        fig.update_layout(showlegend=False)
-        if not MEASURES[measure]["additive"]:
-            fig.update_traces(marker=dict(size=12, line=dict(width=2, color="#0D1117")))
-            lo, hi = plot["measure"].min(), plot["measure"].max()
-            pad = max(hi - lo, 0.1) * 0.1
-            (fig.update_yaxes if ordinal else fig.update_xaxes)(range=[lo - pad, hi + pad])
-        st.plotly_chart(style_fig(fig, height), use_container_width=True)
+            plot = result.copy()
+            plot[rows] = plot[rows].astype(str)
+            top_label = str(result.at[best_idx, rows])
+            plot["lead"] = np.where(plot[rows] == top_label, "Highest", "Other")
+            # Averages differ by tenths, so they get dots on a zoomed axis (see
+            # dot_rating_chart); additive measures keep bars that start at zero.
+            chart = px.bar if MEASURES[measure]["additive"] else px.scatter
+            if ordinal:
+                plot = plot.sort_values(rows)
+                fig = chart(plot, x=rows, y="measure", color="lead",
+                             color_discrete_map={"Highest": ACCENT, "Other": BRAND},
+                             hover_data={"n_titles": ":,", "lead": False},
+                             labels={"measure": measure, rows: "", "n_titles": "Titles"})
+                height = 380
+            else:
+                plot = plot.sort_values("measure")
+                fig = chart(plot, x="measure", y=rows, color="lead",
+                            color_discrete_map={"Highest": ACCENT, "Other": BRAND},
+                            hover_data={"n_titles": ":,", "lead": False},
+                            labels={"measure": measure, rows: "", "n_titles": "Titles"},
+                            **({"orientation": "h"} if MEASURES[measure]["additive"] else {}))
+                height = max(340, 24 * len(plot))
+            fig.update_layout(showlegend=False)
+            if not MEASURES[measure]["additive"]:
+                fig.update_traces(marker=dict(size=12, line=dict(width=2, color="#0D1117")))
+                lo, hi = plot["measure"].min(), plot["measure"].max()
+                pad = max(hi - lo, 0.1) * 0.1
+                (fig.update_yaxes if ordinal else fig.update_xaxes)(range=[lo - pad, hi + pad])
+            st.plotly_chart(style_fig(fig, height), use_container_width=True)
 
-    multi = [d for d in dims if DIMENSIONS[d]["kind"] == "bridge"]
-    if multi and MEASURES[measure]["additive"]:
-        total = result["measure"].sum()
-        distinct = frame["series_id"].nunique()
-        st.warning(
-            f"Summing this column gives {fmt_value(total, measure)}, but a title with several "
-            f"{multi[0].split(' (')[0].lower()}s is counted once in each. That is why the fact "
-            f"table keeps one row per title: the view itself holds {distinct:,} distinct titles. "
-            "Read the bars as reach per group, not as shares of one total."
-        )
+        multi = [d for d in dims if DIMENSIONS[d]["kind"] == "bridge"]
+        if multi and MEASURES[measure]["additive"]:
+            total = result["measure"].sum()
+            distinct = frame["series_id"].nunique()
+            st.warning(
+                f"Summing this column gives {fmt_value(total, measure)}, but a title with several "
+                f"{multi[0].split(' (')[0].lower()}s is counted once in each. That is why the fact "
+                f"table keeps one row per title: the view itself holds {distinct:,} distinct titles. "
+                "Read the bars as reach per group, not as shares of one total."
+            )
 
-    if drill is not None:
-        st.markdown(f"**Drill-down: {drill}s by year**")
-        in_decade = view[view["decade"] == drill]
-        yearly = aggregate(dimension_frame(in_decade, "Year"), in_decade, ["Year"], measure)
-        if yearly.empty:
-            st.info(f"No year in the {drill}s reaches {MIN_GROUP} titles for this measure.")
-        else:
-            yearly["Year"] = yearly["Year"].astype(str)
-            fig = px.bar(yearly, x="Year", y="measure", hover_data={"n_titles": ":,"},
-                         labels={"measure": measure, "Year": "", "n_titles": "Titles"})
-            fig.update_traces(marker_color=BRAND)
-            st.plotly_chart(style_fig(fig, 320), use_container_width=True)
+        if drill is not None:
+            st.markdown(f"**Drill-down: {drill}s by year**")
+            in_decade = view[view["decade"] == drill]
+            yearly = aggregate(dimension_frame(in_decade, "Year"), in_decade, ["Year"], measure)
+            if yearly.empty:
+                st.info(f"No year in the {drill}s reaches {MIN_GROUP} titles for this measure.")
+            else:
+                yearly["Year"] = yearly["Year"].astype(str)
+                fig = px.bar(yearly, x="Year", y="measure", hover_data={"n_titles": ":,"},
+                             labels={"measure": measure, "Year": "", "n_titles": "Titles"})
+                fig.update_traces(marker_color=BRAND)
+                st.plotly_chart(style_fig(fig, 320), use_container_width=True)
 
-    table, sql = st.tabs(["Result table", "SQL for this view"])
-    with table:
-        shown = result.sort_values(dims if ordinal else "measure", ascending=ordinal)
-        if measure == "Titles":
-            shown = shown.drop(columns="n_titles")
-        shown = shown.rename(columns={"measure": measure, "n_titles": "Titles"})
-        st.dataframe(shown, hide_index=True, use_container_width=True, height=320)
-        st.download_button(
-            "Download this result as CSV", shown.to_csv(index=False).encode("utf-8"),
-            file_name=f"warehouse_{rows}_{measure}.csv".replace(" ", "_").lower(),
-            mime="text/csv",
-        )
-    with sql:
-        st.caption("The same aggregation written against the star schema tables in "
-                   "curated-data/model. The dashboard computes it from those Parquet files "
-                   "with pandas; the pipeline runs this form in Spark SQL.")
-        st.code(build_sql(rows, cols, measure, filters), language="sql")
+        table, sql = st.tabs(["Result table", "SQL for this view"])
+        with table:
+            shown = result.sort_values(dims if ordinal else "measure", ascending=ordinal)
+            if measure == "Titles":
+                shown = shown.drop(columns="n_titles")
+            shown = shown.rename(columns={"measure": measure, "n_titles": "Titles"})
+            st.dataframe(shown, hide_index=True, use_container_width=True, height=320, column_config={
+                measure: st.column_config.NumberColumn(format="%.3f" if not MEASURES[measure]["additive"] else "%d"),
+                "Titles": st.column_config.NumberColumn(format="%d")})
+            st.download_button(
+                "Download this result as CSV", shown.to_csv(index=False).encode("utf-8"),
+                file_name=f"warehouse_{rows}_{measure}.csv".replace(" ", "_").lower(),
+                mime="text/csv",
+            )
+        with sql:
+            st.caption("The same aggregation written against the star schema tables in "
+                       "curated-data/model. The dashboard computes it from those Parquet files "
+                       "with pandas; the pipeline runs this form in Spark SQL.")
+            st.code(build_sql(rows, cols, measure, filters), language="sql")
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -1878,6 +2049,10 @@ def genre_graph_layout(edges: pd.DataFrame) -> dict[str, tuple[float, float]]:
         graph.add_edge(row.source, row.target, dist=1.0 - row.jaccard)
     return {k: (float(v[0]), float(v[1])) for k, v in
             nx.kamada_kawai_layout(graph, weight="dist").items()}
+
+
+NODE_NAMES = {"Novel": "titles", "Author": "authors", "Tag": "tags", "Genre": "genres"}
+EDGE_NAMES = {"HAS_TAG": "title-tag", "HAS_GENRE": "title-genre", "WRITTEN_BY": "title-author"}
 
 
 def page_graph() -> None:
@@ -1900,14 +2075,11 @@ def page_graph() -> None:
         except DataUnavailable:
             genre_edges = None
 
-    st.markdown(
-        f"**{n_nodes:,} nodes** "
-        f"({', '.join(f'{v:,} {k}' for k, v in node_counts.items())}) and "
-        f"**{n_edges:,} edges** "
-        f"({', '.join(f'{v:,} {k}' for k, v in edge_counts.items())}), "
-        "stored as graph_nodes / graph_edges so they load straight into Neo4j or GraphFrames."
-    )
-
+    st.markdown(facts_html([
+        ("Nodes", f"{n_nodes:,}: " + ", ".join(f"{v:,} {NODE_NAMES.get(k, k)}" for k, v in node_counts.items())),
+        ("Edges", f"{n_edges:,}: " + ", ".join(f"{v:,} {EDGE_NAMES.get(k, k)}" for k, v in edge_counts.items())),
+        ("Stored as", "graph_nodes / graph_edges, ready for Neo4j or GraphFrames"),
+    ]), unsafe_allow_html=True)
     genre_s, author_s = summary.loc["genre_cooccurrence"], summary.loc["author_collaboration"]
     compare = pd.DataFrame({
         "Genres": [genre_s["n_nodes"], genre_s["n_edges"], genre_s["n_components"],
@@ -1918,154 +2090,441 @@ def page_graph() -> None:
                                  author_s["modularity"]],
     }, index=["Nodes", "Edges", "Connected components", "Largest component",
               "Communities", "Modularity"])
-    left, right = st.columns([2, 3], gap="large")
-    with left:
-        st.markdown("**Two projections, opposite shapes**")
-        st.dataframe(compare.map(lambda v: f"{v:,.4f}" if isinstance(v, float) and v < 1 else f"{v:,.0f}"),
-                     use_container_width=True)
-    with right:
-        st.markdown("**What the numbers say**")
-        st.markdown(
-            f"- Genres form **one component** with modularity {genre_s['modularity']:.3f}: they "
-            "mix freely, so a genre label alone separates titles poorly.\n"
-            f"- Authors split into **{int(author_s['n_components']):,} separate teams**, the "
-            f"largest only {int(author_s['largest_component_size'])} people, modularity "
-            f"{author_s['modularity']:.3f}. Co-writing teams almost never cross over.\n"
-            "- The warehouse can count pairs; ranking influence (PageRank), finding teams "
-            "(components) and routing between genres (shortest path) need graph algorithms."
-        )
+    tab_map, tab_route, tab_auth, tab_shape = st.tabs(
+        ["Genre map", "Route between genres", "Author teams", "Shape of the graph"])
+    # Tabs without an early return are drawn first; the map tab stops when its edges are missing.
+    with tab_shape:
+        left, right = st.columns([2, 3], gap="large")
+        with left:
+            st.markdown("**Two projections, opposite shapes**")
+            st.dataframe(compare.map(lambda v: f"{v:,.4f}" if isinstance(v, float) and v < 1 else f"{v:,.0f}"),
+                         use_container_width=True)
+        with right:
+            st.markdown("**What the numbers say**")
+            st.markdown(
+                f"- Genres form **one component** with modularity {genre_s['modularity']:.3f}: they "
+                "mix freely, so a genre label alone separates titles poorly.\n"
+                f"- Authors split into **{int(author_s['n_components']):,} separate teams**, the "
+                f"largest only {int(author_s['largest_component_size'])} people, modularity "
+                f"{author_s['modularity']:.3f}. Co-writing teams almost never cross over.\n"
+                "- The warehouse can count pairs; ranking influence (PageRank), finding teams "
+                "(components) and routing between genres (shortest path) need graph algorithms."
+            )
 
-    st.divider()
-    st.subheader("Genre map")
-    if genre_edges is None:
-        st.info("The genre edge list has not been written yet. Run "
-                "`python -m src.phases.graph_analysis` in the pipeline container.")
+    with tab_auth:
+        reach = load_lake("model/op_graph_author_reach")
+        authors_pr = load_table("graph_author_pagerank")
+        col_a, col_b = st.columns(2, gap="large")
+        with col_a:
+            st.markdown("**Widest genre range** (Author, Novel, Genre: two hops)")
+            min_titles = st.slider("Minimum titles per author", 3, 20, 8)
+            subset = reach[reach["n_novels"] >= min_titles].nlargest(12, "n_distinct_genres")
+            if subset.empty:
+                st.info("No author has that many titles. Lower the minimum.")
+            else:
+                st.dataframe(
+                    subset[["author", "n_novels", "n_distinct_genres", "avg_weighted_rating"]].rename(
+                        columns={"author": "Author", "n_novels": "Titles",
+                                 "n_distinct_genres": "Genres covered", "avg_weighted_rating": "Rating"}),
+                    hide_index=True, use_container_width=True, height=380,
+                )
+        with col_b:
+            st.markdown("**Most connected co-authors** (collaboration graph)")
+            top_auth = authors_pr.nlargest(12, "degree_centrality")[["node", "degree_centrality", "pagerank"]]
+            n_auth = int(author_s["n_nodes"])
+            top_auth = top_auth.assign(collaborators=(top_auth["degree_centrality"] * (n_auth - 1)).round().astype(int))
+            st.dataframe(
+                top_auth[["node", "collaborators", "pagerank"]].rename(
+                    columns={"node": "Author", "collaborators": "Co-authors", "pagerank": "PageRank"}),
+                hide_index=True, use_container_width=True, height=380,
+                column_config={"PageRank": st.column_config.NumberColumn(format="%.5f")},
+            )
+
+
+
+    with tab_map:
+        if genre_edges is None:
+            st.info("The genre edge list has not been written yet. Run "
+                    "`python -m src.phases.graph_analysis` in the pipeline container.")
+            return
+
+        sizes = dict(zip(genre_dim["genre"], genre_dim["n_novels"]))
+        genre_edges = genre_edges.assign(
+            jaccard=lambda d: d["weight"] / (d["source"].map(sizes) + d["target"].map(sizes) - d["weight"])
+        )
+        positions = genre_graph_layout(genre_edges)
+
+        ctrl, _ = st.columns([2, 3])
+        threshold = ctrl.slider(
+            "Show links with Jaccard similarity of at least", 0.05, 0.40, 0.15, 0.01,
+            help="Jaccard = titles sharing both genres / titles with either. Raw counts would "
+                 "make big genres look linked to everything.",
+        )
+        shown = genre_edges[genre_edges["jaccard"] >= threshold]
+        has_community = "community" in pagerank.columns
+        info = pagerank.set_index("node")
+        palette = [BRAND, ACCENT, "#FFB454", "#FF6B9D", "#4CC9F0"]
+
+        map_col, rank_col = st.columns([3, 2], gap="large")
+        with map_col:
+            import plotly.graph_objects as go
+
+            fig = go.Figure()
+            for lo, hi, width in ((0, 0.2, 0.8), (0.2, 0.3, 1.8), (0.3, 1.01, 3.2)):
+                band = shown[(shown["jaccard"] >= lo) & (shown["jaccard"] < hi)]
+                xs, ys = [], []
+                for row in band.itertuples(index=False):
+                    (x0, y0), (x1, y1) = positions[row.source], positions[row.target]
+                    xs += [x0, x1, None]
+                    ys += [y0, y1, None]
+                fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", hoverinfo="skip", showlegend=False,
+                                         line=dict(width=width, color="rgba(174,181,198,.35)")))
+            names = [n for n in positions]
+            pr = info["pagerank"].reindex(names).fillna(0)
+            community = info["community"].reindex(names).fillna(-1).astype(int) if has_community else pd.Series(0, index=names)
+            fig.add_trace(go.Scatter(
+                x=[positions[n][0] for n in names], y=[positions[n][1] for n in names],
+                mode="markers+text", text=names, textposition="top center",
+                textfont=dict(size=11, color="#D5DAE5"),
+                marker=dict(size=(12 + 260 * pr).clip(upper=46),
+                            color=[palette[c % len(palette)] if c >= 0 else MUTED for c in community],
+                            line=dict(width=1, color="#0D1117")),
+                customdata=np.stack([pr.values, community.values, [sizes.get(n, 0) for n in names]], axis=1),
+                hovertemplate="<b>%{text}</b><br>PageRank %{customdata[0]:.4f}<br>"
+                              "Community %{customdata[1]}<br>%{customdata[2]:,} titles<extra></extra>",
+                showlegend=False,
+            ))
+            fig.update_xaxes(visible=False)
+            fig.update_yaxes(visible=False)
+            st.plotly_chart(style_fig(fig, 560), use_container_width=True)
+            st.caption(
+                f"{len(shown)} of {len(genre_edges)} links shown. Dot size = PageRank, colour = "
+                "community found by greedy modularity in graph_analysis.py."
+            )
+        with rank_col:
+            st.markdown("**Most central genres (PageRank)**")
+            top = pagerank.nlargest(12, "pagerank").sort_values("pagerank")
+            fig = px.bar(top, x="pagerank", y="node", orientation="h",
+                         labels={"pagerank": "PageRank", "node": ""})
+            fig.update_traces(marker_color=BRAND)
+            st.plotly_chart(style_fig(fig, 380), use_container_width=True)
+            if has_community:
+                groups = pagerank.sort_values("pagerank", ascending=False).groupby("community")["node"]
+                for cid, members in groups:
+                    st.markdown(
+                        f'<span style="color:{palette[int(cid) % len(palette)]};font-weight:600">'
+                        f"Community {int(cid)}</span> · " + ", ".join(members.head(8))
+                        + (f" and {len(members) - 8} more" if len(members) > 8 else ""),
+                        unsafe_allow_html=True,
+                    )
+
+    with tab_route:
+        graph = nx.Graph()
+        graph.add_nodes_from(positions)
+        for row in shown.itertuples(index=False):
+            graph.add_edge(row.source, row.target, weight=row.weight, jaccard=row.jaccard)
+        genres = sorted(positions)
+        a, b = st.columns(2)
+        src = a.selectbox("From", genres, index=genres.index("Yaoi") if "Yaoi" in genres else 0)
+        dst = b.selectbox("To", genres, index=genres.index("Martial Arts") if "Martial Arts" in genres else 1)
+        if src == dst:
+            st.info("Pick two different genres.")
+        elif not nx.has_path(graph, src, dst):
+            st.info(f"No route between {src} and {dst} at Jaccard {threshold:.2f}. Lower the "
+                    "threshold on the map to let weaker links through.")
+        else:
+            path = nx.shortest_path(graph, src, dst)
+            hops = [
+                f"{u} to {v}: {graph[u][v]['weight']:,} shared titles (Jaccard {graph[u][v]['jaccard']:.2f})"
+                for u, v in zip(path, path[1:])
+            ]
+            st.markdown(f"**{len(path) - 1} hop{'s' if len(path) > 2 else ''}:** " + chips(path, active=True),
+                        unsafe_allow_html=True)
+            st.markdown("\n".join(f"- {h}" for h in hops))
+
+
+# PAGE — Content graph (similarity graph from the recommender's text space)
+#: Amber marks genres below the curator threshold; paired with a text column, never colour alone.
+REVIEW = "#FFB454"
+#: Genres labelled on the scatter: the ends of the trend and the two outliers. The rest overlap; hover shows them.
+LANDMARK_GENRES = {"Romance", "Fantasy", "Action", "Gender Bender", "Sports", "Mecha", "Comedy",
+                   "Psychological", "Seinen", "Shoujo Ai"}
+
+
+@st.cache_data(show_spinner=False, max_entries=2)
+def _community_layout(edges: pd.DataFrame, keep: tuple[int, ...]) -> dict[int, tuple[float, float]]:
+    """Communities on a circle in Fiedler order, so heavily linked communities sit side by side."""
+    import networkx as nx
+
+    graph = nx.Graph()
+    graph.add_nodes_from(keep)
+    for row in edges.itertuples(index=False):
+        graph.add_edge(int(row.lo), int(row.hi), weight=float(row.n_edges))
+    order = nx.spectral_ordering(graph, weight="weight", seed=7) if graph.number_of_edges() else list(keep)
+    step = 2 * np.pi / len(order)
+    return {int(n): (float(np.cos(step * (i + .5))), float(np.sin(step * (i + .5)))) for i, n in enumerate(order)}
+
+
+def _neighbourhood(edges: pd.DataFrame, sid: int) -> pd.DataFrame:
+    """Direct neighbours of one title with cosine similarity, strongest first."""
+    hit = edges[(edges["src"] == sid) | (edges["dst"] == sid)]
+    other = np.where(hit["src"].to_numpy() == sid, hit["dst"].to_numpy(), hit["src"].to_numpy())
+    return (pd.DataFrame({"series_id": other, "similarity": hit["weight"].to_numpy()})
+            .sort_values("similarity", ascending=False).reset_index(drop=True))
+
+
+def page_content_graph() -> None:
+    hero(
+        "Content graph",
+        "Every title linked to its 10 closest titles by synopsis and tags, in the same text space the "
+        "recommender uses. The graph shows which genres the tagging model can be trusted with and which "
+        "story communities compete for the same readers.",
+    )
+    try:
+        with st.spinner("Loading the content graph…"):
+            summary = load_table("graph_similarity_summary").iloc[0]
+            homophily = load_table("graph_similarity_homophily")
+            communities = load_table("graph_similarity_communities").sort_values("community")
+            community_edges = load_table("graph_similarity_community_edges")
+            nodes = load_table("graph_similarity_nodes")
+            edges = load_table("graph_similarity_edges")
+    except DataUnavailable as exc:
+        st.info("The content graph has not been built yet." if PUBLIC else
+                "The content graph has not been built yet. Run "
+                "`python -m src.phases.similarity_graph` in the pipeline container, then reload.")
+        technical_details(str(exc))
         return
 
-    sizes = dict(zip(genre_dim["genre"], genre_dim["n_novels"]))
-    genre_edges = genre_edges.assign(
-        jaccard=lambda d: d["weight"] / (d["source"].map(sizes) + d["target"].map(sizes) - d["weight"])
-    )
-    positions = genre_graph_layout(genre_edges)
+    st.markdown(facts_html([
+        ("Graph", f"{int(summary['n_nodes']):,} titles, {int(summary['n_edges']):,} links"),
+        ("Communities", f"{int(summary['n_communities'])} (Louvain), modularity {summary['modularity']:.3f}"),
+        ("Built from", "TF-IDF of title, synopsis and tags, reduced to 200 SVD dimensions"),
+    ]), unsafe_allow_html=True)
 
-    ctrl, _ = st.columns([2, 3])
-    threshold = ctrl.slider(
-        "Show links with Jaccard similarity of at least", 0.05, 0.40, 0.15, 0.01,
-        help="Jaccard = titles sharing both genres / titles with either. Raw counts would "
-             "make big genres look linked to everything.",
-    )
-    shown = genre_edges[genre_edges["jaccard"] >= threshold]
-    has_community = "community" in pagerank.columns
-    info = pagerank.set_index("node")
-    palette = [BRAND, ACCENT, "#FFB454", "#FF6B9D", "#4CC9F0"]
+    tab_rel, tab_comm, tab_title, tab_hub = st.tabs(
+        ["Genre reliability", "Story communities", "Title neighbourhood", "Hubs"])
 
-    map_col, rank_col = st.columns([3, 2], gap="large")
-    with map_col:
-        import plotly.graph_objects as go
-
-        fig = go.Figure()
-        for lo, hi, width in ((0, 0.2, 0.8), (0.2, 0.3, 1.8), (0.3, 1.01, 3.2)):
-            band = shown[(shown["jaccard"] >= lo) & (shown["jaccard"] < hi)]
-            xs, ys = [], []
-            for row in band.itertuples(index=False):
-                (x0, y0), (x1, y1) = positions[row.source], positions[row.target]
-                xs += [x0, x1, None]
-                ys += [y0, y1, None]
-            fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", hoverinfo="skip", showlegend=False,
-                                     line=dict(width=width, color="rgba(174,181,198,.35)")))
-        names = [n for n in positions]
-        pr = info["pagerank"].reindex(names).fillna(0)
-        community = info["community"].reindex(names).fillna(-1).astype(int) if has_community else pd.Series(0, index=names)
-        fig.add_trace(go.Scatter(
-            x=[positions[n][0] for n in names], y=[positions[n][1] for n in names],
-            mode="markers+text", text=names, textposition="top center",
-            textfont=dict(size=11, color="#D5DAE5"),
-            marker=dict(size=(12 + 260 * pr).clip(upper=46),
-                        color=[palette[c % len(palette)] if c >= 0 else MUTED for c in community],
-                        line=dict(width=1, color="#0D1117")),
-            customdata=np.stack([pr.values, community.values, [sizes.get(n, 0) for n in names]], axis=1),
-            hovertemplate="<b>%{text}</b><br>PageRank %{customdata[0]:.4f}<br>"
-                          "Community %{customdata[1]}<br>%{customdata[2]:,} titles<extra></extra>",
-            showlegend=False,
-        ))
-        fig.update_xaxes(visible=False)
-        fig.update_yaxes(visible=False)
-        st.plotly_chart(style_fig(fig, 560), use_container_width=True)
-        st.caption(
-            f"{len(shown)} of {len(genre_edges)} links shown. Dot size = PageRank, colour = "
-            "community found by greedy modularity in graph_analysis.py."
+    with tab_rel:
+        answer(
+            "Genres whose titles sit close together in the text space are the genres the model tags well. "
+            f"Across {len(homophily)} genres, the share of same-genre neighbours and the model's F1 correlate at "
+            f"Spearman ρ = {summary['spearman_f1_neighbour_share']:.3f}."
         )
-    with rank_col:
-        st.markdown("**Most central genres (PageRank)**")
-        top = pagerank.nlargest(12, "pagerank").sort_values("pagerank")
-        fig = px.bar(top, x="pagerank", y="node", orientation="h",
-                     labels={"pagerank": "PageRank", "node": ""})
-        fig.update_traces(marker_color=BRAND)
-        st.plotly_chart(style_fig(fig, 380), use_container_width=True)
-        if has_community:
-            groups = pagerank.sort_values("pagerank", ascending=False).groupby("community")["node"]
-            for cid, members in groups:
-                st.markdown(
-                    f'<span style="color:{palette[int(cid) % len(palette)]};font-weight:600">'
-                    f"Community {int(cid)}</span> · " + ", ".join(members.head(8))
-                    + (f" and {len(members) - 8} more" if len(members) > 8 else ""),
-                    unsafe_allow_html=True,
+        ctrl, _ = st.columns([2, 3])
+        reference = summary.get("homophily_reference_model", "svm")
+        cutoff = ctrl.slider(
+            "Ask a curator to confirm genres with F1 below", 0.30, 0.80, 0.50, 0.05,
+            help=f"F1 of the {MODEL_NAMES.get(reference, reference)} genre tagger on the 7,932 held-out titles.",
+        )
+        rel = homophily.assign(handling=np.where(homophily["f1"] < cutoff, "Confirm by curator", "Auto-tag, spot-check"))
+        chart_col, list_col = st.columns([3, 2], gap="large")
+        with chart_col:
+            fig = go.Figure()
+            for label, color in (("Auto-tag, spot-check", BRAND), ("Confirm by curator", REVIEW)):
+                part = rel[rel["handling"] == label]
+                fig.add_trace(go.Scatter(
+                    x=part["neighbour_share"], y=part["f1"], mode="markers+text", name=label,
+                    text=part["genre"].where(part["genre"].isin(LANDMARK_GENRES), ""),
+                    hovertext=part["genre"], textfont=dict(size=11, color="#C4CAD6"),
+                    textposition=np.where(part["neighbour_share"] < .12, "top right", "top center"),
+                    marker=dict(size=8 + 60 * part["prevalence"], color=color, line=dict(width=1, color="#0D1117")),
+                    customdata=np.stack([part["n_novels"], part["prevalence"] * 100], axis=1),
+                    hovertemplate="<b>%{hovertext}</b><br>Same-genre neighbours %{x:.0%}<br>F1 %{y:.3f}"
+                                  "<br>%{customdata[0]:,} titles (%{customdata[1]:.1f}%)<extra></extra>",
+                ))
+            fig.add_hline(y=cutoff, line=dict(color=REVIEW, width=1, dash="dot"))
+            fig.update_layout(legend=dict(orientation="h", y=1.08, x=0))
+            fig.update_xaxes(title="Same-genre neighbours", tickformat=".0%")
+            fig.update_yaxes(title="F1 of the genre tagger")
+            st.plotly_chart(style_fig(fig, 470), use_container_width=True)
+            st.caption("Dot size = share of the catalogue carrying the genre. Sports and Gender Bender sit above "
+                       "the trend because a very specific tag gives them away.")
+        with list_col:
+            flagged = rel[rel["handling"] == "Confirm by curator"].sort_values("f1")
+            st.markdown(f"**{len(flagged)} genre{' needs' if len(flagged) == 1 else 's need'} a curator** at F1 below {cutoff:.2f}")
+            if flagged.empty:
+                st.caption("No genre falls below this threshold. Raise it to see the weakest ones.")
+            else:
+                st.markdown(chips(flagged["genre"]), unsafe_allow_html=True)
+            st.dataframe(
+                rel.sort_values("f1")[["genre", "f1", "neighbour_share"]].rename(columns={
+                    "genre": "Genre", "f1": "F1", "neighbour_share": "Neighbours"}),
+                hide_index=True, use_container_width=True, height=330,
+                column_config={"F1": st.column_config.NumberColumn(format="%.2f", width="small"),
+                               "Neighbours": st.column_config.NumberColumn(
+                                   format="%.2f", width="small", help="Share of neighbours with the same genre")},
+            )
+
+    with tab_comm:
+        answer(
+            f"Titles split into {int(summary['n_communities'])} communities along origin and setting rather than "
+            f"primary genre: agreement with the primary-genre label is only NMI {summary['nmi_vs_primary_genre']:.3f}. "
+            "Titles in one community compete for the same readers."
+        )
+        top_n = 14
+        keep = tuple(int(c) for c in communities.nlargest(top_n, "size")["community"])
+        links = community_edges[community_edges["lo"].isin(keep) & community_edges["hi"].isin(keep)]
+        links = links[links["n_edges"] >= links["n_edges"].quantile(.5)] if len(links) else links
+        pos = _community_layout(links, keep)
+        info = communities.set_index("community")
+        map_col, detail_col = st.columns([3, 2], gap="large")
+        with map_col:
+            fig = go.Figure()
+            peak = links["n_edges"].max() if len(links) else 1
+            for row in links.itertuples(index=False):
+                (x0, y0), (x1, y1) = pos[int(row.lo)], pos[int(row.hi)]
+                fig.add_trace(go.Scatter(x=[x0, x1], y=[y0, y1], mode="lines", hoverinfo="skip", showlegend=False,
+                                         line=dict(width=.6 + 5 * row.n_edges / peak, color="rgba(174,181,198,.35)")))
+            ids = list(pos)
+            fig.add_trace(go.Scatter(
+                x=[pos[c][0] for c in ids], y=[pos[c][1] for c in ids], mode="markers+text", showlegend=False,
+                # Short labels pointing away from the centre stay inside a phone-width chart;
+                # the full label is in the hover and the community picker.
+                text=[f"K{c} {str(info.loc[c, 'label']).split(' + ')[0]}" for c in ids],
+                hovertext=[f"K{c} {info.loc[c, 'label']}" for c in ids],
+                textposition=[("top center" if pos[c][1] >= 0 else "bottom center") if abs(pos[c][0]) < .35
+                              else ("middle right" if pos[c][0] > 0 else "middle left") for c in ids],
+                textfont=dict(size=10.5, color="#D5DAE5"),
+                marker=dict(size=[10 + info.loc[c, "size"] / 140 for c in ids], color=BRAND,
+                            line=dict(width=1, color="#0D1117")),
+                customdata=np.stack([[info.loc[c, "size"] for c in ids], [info.loc[c, "top_origin"] for c in ids],
+                                     [info.loc[c, "origin_share"] * 100 for c in ids]], axis=1),
+                hovertemplate="<b>%{hovertext}</b><br>%{customdata[0]:,} titles<br>"
+                              "%{customdata[1]} %{customdata[2]:.0f}%<extra></extra>",
+            ))
+            fig.update_xaxes(visible=False, range=[-1.95, 1.95])
+            fig.update_yaxes(visible=False, range=[-1.3, 1.3])
+            st.plotly_chart(style_fig(fig, 470), use_container_width=True)
+            st.caption(f"The {top_n} largest of {int(summary['n_communities'])} communities. Line width = number of "
+                       "kNN links between two communities. Labels name the leading genre after Romance, Fantasy "
+                       "and Drama, which appear in nearly every community; hover a dot for the second one.")
+        with detail_col:
+            options = list(info.index)
+            cid = st.selectbox(
+                "Community", options,
+                format_func=lambda c: f"K{c} · {info.loc[c, 'label']} ({info.loc[c, 'top_origin']}, {int(info.loc[c, 'size']):,})",
+            )
+            row = info.loc[cid]
+            st.markdown(facts_html([
+                ("Titles", f"{int(row['size']):,}"),
+                ("Dominant origin", f"{row['top_origin']} ({row['origin_share']:.0%})"),
+                ("Average rating", f"{row['avg_weighted_rating']:.2f}" if pd.notna(row["avg_weighted_rating"]) else "no rated titles"),
+            ]), unsafe_allow_html=True)
+            st.markdown(chips(str(row["top_genres"]).split(", ")), unsafe_allow_html=True)
+            members = nodes[nodes["community"] == cid]
+            st.markdown("**Best-known titles**")
+            st.dataframe(
+                members.nlargest(8, "rating_votes")[["title", "rating_votes", "weighted_rating"]].rename(columns={
+                    "title": "Title", "rating_votes": "Votes", "weighted_rating": "Rating"}),
+                hide_index=True, use_container_width=True,
+                column_config={"Votes": st.column_config.NumberColumn(format="%d"),
+                               "Rating": st.column_config.NumberColumn(format="%.2f")},
+            )
+
+    with tab_title:
+        c1, c2 = st.columns([2, 3], gap="large")
+        query = c1.text_input("Search by title", placeholder="Part of a title, e.g. martial god", key="cg_query")
+        pool = nodes
+        if query.strip():
+            pool = nodes[nodes["title"].str.contains(re.escape(query.strip()), case=False, na=False)]
+        if pool.empty:
+            st.info("No title matches that search. Try a shorter part of the name.")
+        else:
+            pool = pool.sort_values("rating_votes", ascending=False, na_position="last").head(60)
+            labels = {int(r.series_id): str(r.title) for r in pool.itertuples(index=False)}
+            sid = c2.selectbox(f"{len(pool)} best-known matches", list(labels), format_func=labels.get, key="cg_title")
+            me = nodes.loc[nodes["series_id"] == sid].iloc[0]
+            near = _neighbourhood(edges, sid).merge(nodes, on="series_id", how="left")
+            rank = (nodes["pagerank"] > me["pagerank"]).mean()
+            cinfo = info.loc[int(me["community"])]
+            st.markdown(facts_html([
+                ("Community", f"K{int(me['community'])} · {html.escape(str(cinfo['label']))}"),
+                ("Linked titles", f"{int(me['degree'])} (10 chosen by this title, the rest chose it)"),
+                ("Centrality", f"PageRank higher than {1 - rank:.0%} of titles"),
+            ]), unsafe_allow_html=True)
+
+            import networkx as nx
+
+            ego = nx.Graph()
+            ego.add_node(sid)
+            ids = set(near["series_id"]) | {sid}
+            for r in near.itertuples(index=False):
+                ego.add_edge(sid, int(r.series_id), weight=float(r.similarity))
+            among = edges[edges["src"].isin(ids) & edges["dst"].isin(ids)]
+            for r in among.itertuples(index=False):
+                ego.add_edge(int(r.src), int(r.dst), weight=float(r.weight))
+            layout = nx.spring_layout(ego, weight="weight", seed=7)
+            names = nodes.set_index("series_id").loc[list(ego.nodes)]
+            graph_col, list_col = st.columns([3, 2], gap="large")
+            with graph_col:
+                fig = go.Figure()
+                xs, ys = [], []
+                for u, v in ego.edges():
+                    xs += [layout[u][0], layout[v][0], None]
+                    ys += [layout[u][1], layout[v][1], None]
+                fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", hoverinfo="skip", showlegend=False,
+                                         line=dict(width=1, color="rgba(174,181,198,.35)")))
+                order = list(ego.nodes)
+                same = [int(names.loc[n, "community"]) == int(me["community"]) for n in order]
+                fig.add_trace(go.Scatter(
+                    x=[layout[n][0] for n in order], y=[layout[n][1] for n in order], mode="markers",
+                    showlegend=False, text=[str(names.loc[n, "title"]) for n in order],
+                    marker=dict(size=[22 if n == sid else 12 for n in order],
+                                color=[ACCENT if n == sid else BRAND if s else MUTED for n, s in zip(order, same)],
+                                line=dict(width=1, color="#0D1117")),
+                    hovertemplate="%{text}<extra></extra>",
+                ))
+                fig.update_xaxes(visible=False)
+                fig.update_yaxes(visible=False)
+                st.plotly_chart(style_fig(fig, 420), use_container_width=True)
+                st.caption("Teal = this title, purple = neighbour in the same community, grey = neighbour from "
+                           "another community. Lines between neighbours are links they share with each other.")
+            with list_col:
+                st.markdown(f"**{len(near)} closest titles**")
+                st.dataframe(
+                    near[["title", "similarity", "community", "weighted_rating"]].assign(
+                        community=lambda d: "K" + d["community"].astype("Int64").astype(str)).rename(columns={
+                        "title": "Title", "similarity": "Similarity", "community": "Community",
+                        "weighted_rating": "Rating"}),
+                    hide_index=True, use_container_width=True, height=380,
+                    column_config={"Title": st.column_config.TextColumn(width="medium"),
+                                   "Similarity": st.column_config.ProgressColumn(format="%.2f", min_value=0, max_value=1),
+                                   "Rating": st.column_config.NumberColumn(format="%.2f")},
                 )
 
-    st.write("")
-    st.subheader("Route between two genres")
-    graph = nx.Graph()
-    graph.add_nodes_from(positions)
-    for row in shown.itertuples(index=False):
-        graph.add_edge(row.source, row.target, weight=row.weight, jaccard=row.jaccard)
-    genres = sorted(positions)
-    a, b = st.columns(2)
-    src = a.selectbox("From", genres, index=genres.index("Yaoi") if "Yaoi" in genres else 0)
-    dst = b.selectbox("To", genres, index=genres.index("Martial Arts") if "Martial Arts" in genres else 1)
-    if src == dst:
-        st.info("Pick two different genres.")
-    elif not nx.has_path(graph, src, dst):
-        st.info(f"No route between {src} and {dst} at Jaccard {threshold:.2f}. Lower the "
-                "threshold on the map to let weaker links through.")
-    else:
-        path = nx.shortest_path(graph, src, dst)
-        hops = [
-            f"{u} to {v}: {graph[u][v]['weight']:,} shared titles (Jaccard {graph[u][v]['jaccard']:.2f})"
-            for u, v in zip(path, path[1:])
-        ]
-        st.markdown(f"**{len(path) - 1} hop{'s' if len(path) > 2 else ''}:** " + chips(path, active=True),
-                    unsafe_allow_html=True)
-        st.markdown("\n".join(f"- {h}" for h in hops))
-
-    st.divider()
-    st.subheader("Authors")
-    reach = load_lake("model/op_graph_author_reach")
-    authors_pr = load_table("graph_author_pagerank")
-    col_a, col_b = st.columns(2, gap="large")
-    with col_a:
-        st.markdown("**Widest genre range** (Author, Novel, Genre: two hops)")
-        min_titles = st.slider("Minimum titles per author", 3, 20, 8)
-        subset = reach[reach["n_novels"] >= min_titles].nlargest(12, "n_distinct_genres")
-        if subset.empty:
-            st.info("No author has that many titles. Lower the minimum.")
-        else:
-            st.dataframe(
-                subset[["author", "n_novels", "n_distinct_genres", "avg_weighted_rating"]].rename(
-                    columns={"author": "Author", "n_novels": "Titles",
-                             "n_distinct_genres": "Genres covered", "avg_weighted_rating": "Rating"}),
-                hide_index=True, use_container_width=True, height=380,
-            )
-    with col_b:
-        st.markdown("**Most connected co-authors** (collaboration graph)")
-        top_auth = authors_pr.nlargest(12, "degree_centrality")[["node", "degree_centrality", "pagerank"]]
-        n_auth = int(author_s["n_nodes"])
-        top_auth = top_auth.assign(collaborators=(top_auth["degree_centrality"] * (n_auth - 1)).round().astype(int))
-        st.dataframe(
-            top_auth[["node", "collaborators", "pagerank"]].rename(
-                columns={"node": "Author", "collaborators": "Co-authors", "pagerank": "PageRank"}),
-            hide_index=True, use_container_width=True, height=380,
-            column_config={"PageRank": st.column_config.NumberColumn(format="%.5f")},
+    with tab_hub:
+        answer(
+            "The most central titles are not the popular ones. PageRank and vote count correlate at only "
+            f"ρ = {summary['pagerank_vs_votes_spearman']:.3f}: the centre of the graph holds titles written to a "
+            "template, which a plain nearest-neighbour recommender would suggest far too often."
         )
+        left, right = st.columns([3, 2], gap="large")
+        with left:
+            hubs = nodes.nlargest(15, "pagerank").assign(
+                community=lambda d: "K" + d["community"].astype(str))
+            st.dataframe(
+                hubs[["title", "community", "degree", "rating_votes", "pagerank"]].rename(columns={
+                    "title": "Title", "community": "Community",
+                    "degree": "Linked titles", "rating_votes": "Votes", "pagerank": "PageRank"}),
+                hide_index=True, use_container_width=True, height=560,
+                column_config={"Title": st.column_config.TextColumn(width="medium"),
+                               "Votes": st.column_config.NumberColumn(format="%d"),
+                               "PageRank": st.column_config.NumberColumn(format="%.6f")},
+            )
+        with right:
+            fig = px.histogram(nodes, x="degree", nbins=60, log_y=True,
+                               labels={"degree": "Linked titles per title"})
+            fig.update_traces(marker_color=BRAND)
+            fig.update_yaxes(title="Titles (log scale)")
+            st.plotly_chart(style_fig(fig, 300), use_container_width=True)
+            st.markdown(
+                f'<p class="nl-note">Every title chooses 10 neighbours, so no title has fewer than 10 links. '
+                f'The median is {summary["degree_median"]:.0f}, but one title is linked to '
+                f'{int(summary["degree_max"])} others. Re-ranking recommendations by weighted rating, or keeping '
+                "only mutual neighbours, stops these hubs from crowding out better-rated titles.</p>",
+                unsafe_allow_html=True,
+            )
+
 
 
 #: English, publish-safe audit text rebuilt from the numbers in the pipeline's evidence.
@@ -2092,7 +2551,8 @@ def _cmp01(ev: str) -> str:
     if not files:
         return "Every source file carries a checksum and ingestion time."
     listed = ", ".join(f"{name} ({_int(rows)} rows)" for name, rows in files)
-    return f"{len(files)} source files carry a checksum, row count and ingestion time: {listed}."
+    noun = "source file carries" if len(files) == 1 else "source files carry"
+    return f"{len(files)} {noun} a checksum, row count and ingestion time: {listed}."
 
 
 def _cmp03(ev: str) -> str:
@@ -2252,111 +2712,101 @@ ELEMENT_RATIONALE = {
 }
 
 
+# PAGE — Quality & Governance
+PILLAR_EN = {"3.1 Security": "Security", "3.2 Compliance": "Compliance",
+             "3.3 Data Privacy": "Privacy", "3.4 Data Quality": "Data quality"}
+
+
+def checklist_html(rows: pd.DataFrame) -> str:
+    """One pillar's checks: status word first (never colour alone), then the check and its evidence."""
+    items = []
+    for r in rows.itertuples(index=False):
+        follow = f'<div class="fu">Follow-up: {html.escape(r.follow_en)}</div>' if r.follow_en else ""
+        items.append(
+            f'<li class="st-{r.status_en.lower()}"><span class="st">{r.status_en}</span>'
+            f'<div><div class="nm">{html.escape(r.name_en)} <code>{html.escape(r.check_id)}</code></div>'
+            f'<div class="ev">{html.escape(r.evidence_en)}</div>{follow}</div></li>'
+        )
+    return '<ul class="nl-checks">' + "".join(items) + "</ul>"
+
+
 def page_governance() -> None:
     hero(
         "Data quality & governance",
-        "What the pipeline checks before anything reaches a chart: format classes, the "
-        "cleaning steps that change row counts, and the security, compliance, privacy and "
-        "quality audit.",
+        "Every check the pipeline runs before a number reaches a chart: security, compliance, "
+        "privacy and quality, then the cleaning steps and the format of every source column.",
     )
-
     with st.spinner("Loading audit tables…"):
         audit = load_lake("governance/audit_report")
         funnel = load_table("quality_report")
         elements = load_lake("governance/data_elements")
         formats = load_lake("governance/data_element_summary")
-
     audit = public_audit(audit.assign(status_en=audit["status"].map(STATUS_LABEL).fillna(audit["status"])))
-    open_items = audit[audit["status_en"].isin(["Fail", "Warning"])]
+    counts = audit["status_en"].value_counts()
+    open_items = int(counts.get("Fail", 0) + counts.get("Warning", 0))
 
-    st.subheader("Needs attention")
-    if open_items.empty:
-        st.success(f"All {len(audit)} audit checks pass or are informational.")
+    if open_items:
+        answer(f"<b>{open_items} of {len(audit)} checks need attention</b>; they are listed first in their pillar.")
     else:
-        for row in open_items.itertuples(index=False):
-            with st.container(border=True):
-                st.markdown(
-                    f'<span style="color:{STATUS_COLOR[row.status_en]};font-weight:650">'
-                    f"{row.status_en}</span> · `{row.check_id}` · {html.escape(row.name_en)}",
-                    unsafe_allow_html=True,
-                )
-                st.caption(f"Evidence: {row.evidence_en}")
-                if row.follow_en:
-                    st.markdown(f"Follow-up: {row.follow_en}")
+        answer(f"<b>All {len(audit)} checks pass</b> or are informational: "
+               f"{int(counts.get('Pass', 0))} pass, {int(counts.get('Info', 0))} record a fact without a verdict.")
 
-    st.write("")
-    left, right = st.columns([2, 3], gap="large")
-    with left:
-        st.markdown("**Audit result by pillar**")
-        tally = audit.groupby(["pillar", "status_en"]).size().reset_index(name="checks")
-        fig = px.bar(tally, x="checks", y="pillar", color="status_en", orientation="h",
-                     color_discrete_map=STATUS_COLOR,
-                     category_orders={"status_en": ["Pass", "Warning", "Fail", "Info"]},
-                     labels={"checks": "Checks", "pillar": "", "status_en": ""})
-        fig.update_yaxes(categoryorder="category descending")
-        # Several statuses stack on one pillar: one tooltip lists them all.
-        fig.update_layout(hovermode="y unified")
-        st.plotly_chart(style_fig(fig, 300), use_container_width=True)
-    with right:
-        st.markdown("**Every check**")
-        pick = st.multiselect("Status", ["Pass", "Warning", "Fail", "Info"],
-                              default=["Pass", "Warning", "Fail", "Info"])
-        rows = audit[audit["status_en"].isin(pick)]
-        if rows.empty:
-            st.info("Select at least one status to list checks.")
-        else:
-            st.dataframe(
-                rows[["check_id", "pillar", "status_en", "name_en", "evidence_en"]].rename(columns={
-                    "check_id": "ID", "pillar": "Pillar", "status_en": "Status",
-                    "name_en": "Check", "evidence_en": "Evidence"}),
-                hide_index=True, use_container_width=True, height=300,
+    order = {"Fail": 0, "Warning": 1, "Pass": 2, "Info": 3}
+    audit = audit.assign(_o=audit["status_en"].map(order)).sort_values(["pillar", "_o", "check_id"])
+    pillars = list(dict.fromkeys(audit["pillar"]))
+    for pair in (pillars[:2], pillars[2:]):
+        for col, pillar in zip(st.columns(2, gap="large"), pair):
+            rows = audit[audit["pillar"] == pillar]
+            tally = rows["status_en"].value_counts()
+            col.markdown(
+                f'<div class="nl-pillar"><span>{PILLAR_EN.get(pillar, pillar)}</span>'
+                f'<span class="tally">{" · ".join(f"{n} {s.lower()}" for s, n in tally.items())}</span></div>'
+                + checklist_html(rows),
+                unsafe_allow_html=True,
             )
 
     st.divider()
-    st.subheader("Cleaning steps and row counts")
+    st.subheader("What cleaning does to the row count")
     main_line = ["1_raw_loaded", "2_identified", "3_sentinels_to_null", "4_deduplicated", "6_enriched"]
     steps = funnel.assign(order=funnel["step"].map(lambda x: main_line.index(x) if x in main_line else 10 + int(x[0])))
     steps = steps.sort_values("order").drop(columns="order").reset_index(drop=True)
     steps["step_label"] = steps["step"].str.replace(r"^\d+[a-z]?_", "", regex=True).str.replace("_", " ")
     steps["note"] = [FUNNEL_NOTES.get(step, lambda n: "")(note) for step, note in zip(steps["step"], steps["note"])]
-    steps["order"] = range(len(steps))
-    fig = px.bar(steps, x="rows", y="step_label", orientation="h", text="rows",
-                 hover_data={"note": True, "order": False},
-                 labels={"rows": "Rows after step", "step_label": ""})
-    fig.update_traces(marker_color=BRAND, texttemplate="%{text:,}", textposition="outside",
-                      cliponaxis=False)
+    raw = int(steps.iloc[0]["rows"])
+    final = int(steps.loc[steps["step"] == "6_enriched", "rows"].iloc[0]) if (steps["step"] == "6_enriched").any() else raw
+    answer(f"{raw:,} rows go in and {final:,} come out: only {raw - final:,} duplicate series are removed. "
+           "The last three bars are subsets that specific analyses use.")
+    steps["kind"] = np.where(steps["step"].isin(main_line), "Catalogue", "Subset used by an analysis")
+    fig = px.bar(steps, x="rows", y="step_label", orientation="h", text="rows", color="kind",
+                 color_discrete_map={"Catalogue": BRAND, "Subset used by an analysis": "#8A90A6"},
+                 hover_data={"note": True, "kind": False},
+                 labels={"rows": "Rows", "step_label": "", "kind": ""})
+    fig.update_traces(texttemplate="%{text:,}", textposition="outside", cliponaxis=False)
     fig.update_yaxes(categoryorder="array", categoryarray=steps["step_label"].tolist()[::-1])
-    st.plotly_chart(style_fig(fig, 40 * len(steps) + 60), use_container_width=True)
-    st.caption(
-        "Only duplicate series leave the catalogue; the later bars are subsets used by specific "
-        "analyses, and 'reliable rating' keeps the titles with 10+ votes that enter rating "
-        "averages. Hover a bar for the step note."
-    )
+    fig.update_layout(legend=dict(orientation="h", y=-0.2))
+    st.plotly_chart(style_fig(fig, 40 * len(steps) + 90), use_container_width=True)
 
     st.divider()
-    st.subheader("Data elements by format class")
-    st.caption("Profiled on the raw catalogue (novel_catalogue.csv) by data_catalog.py, before cleaning.")
+    st.subheader("What kind of data each source column holds")
     formats = formats.assign(format_class=formats["format_class"].map(ELEMENT_TERMS).fillna(formats["format_class"]))
     elements = elements.assign(
         **{col: elements[col].map(ELEMENT_TERMS).fillna(elements[col])
            for col in ("format_class", "domain", "sensitivity")},
         rationale=elements["name"].map(ELEMENT_RATIONALE).fillna(""),
     )
-    fmt_cols = st.columns(len(formats))
-    for col, row in zip(fmt_cols, formats.itertuples(index=False)):
-        with col:
-            st.markdown(f"**{row.format_class}** · {row.n_elements} elements")
-            st.caption(row.elements)
-    pick_fmt = st.selectbox("Show elements of", ["All"] + formats["format_class"].tolist())
+    answer(" · ".join(f"<b>{r.n_elements}</b> {r.format_class.lower()}" for r in formats.itertuples(index=False))
+           + " columns in novel_catalogue.csv, profiled before cleaning.")
+    pick_fmt = st.radio("Format class", ["All"] + formats["format_class"].tolist(), horizontal=True)
     shown = elements if pick_fmt == "All" else elements[elements["format_class"] == pick_fmt]
     st.dataframe(
         shown[["name", "format_class", "domain", "physical_type", "pct_sentinel",
                "sensitivity", "rationale"]].rename(columns={
-                   "name": "Element", "format_class": "Format", "domain": "Domain",
+                   "name": "Column", "format_class": "Format", "domain": "Role",
                    "physical_type": "Type", "pct_sentinel": "% placeholder",
                    "sensitivity": "Sensitivity", "rationale": "Why this class"}),
-        hide_index=True, use_container_width=True, height=360,
-        column_config={"% placeholder": st.column_config.NumberColumn(format="%.2f")},
+        hide_index=True, use_container_width=True, height=380,
+        column_config={"% placeholder": st.column_config.NumberColumn(format="%.2f"),
+                       "Why this class": st.column_config.TextColumn(width="large")},
     )
 
 
@@ -2593,6 +3043,7 @@ def page_genre() -> None:
                      text=long["share"].map("{:.0f}%".format),
                      labels={"share": "% of titles", "origin": "", "group": ""})
         fig.update_traces(textposition="outside", cliponaxis=False)
+        fig.update_xaxes(range=[0, long["share"].max() * 1.2])
         fig.update_yaxes(categoryorder="array", categoryarray=list(ORIGIN_COLORS)[::-1])
         fig.update_layout(legend=dict(orientation="h", y=1.12))
         st.plotly_chart(style_fig(fig, 340), use_container_width=True)
@@ -2613,9 +3064,10 @@ def page_genre() -> None:
             sig = sig.reset_index(names="tag")
             fig = px.bar(sig, x="lift", y="tag", orientation="h", text=sig["lift"].map("×{:.1f}".format),
                          hover_data={"titles": ":,", "share": ":.1f"},
-                         labels={"lift": "Times more common than in the catalogue", "tag": "",
+                         labels={"lift": "Lift vs. the whole catalogue", "tag": "",
                                  "titles": "Titles", "share": "% of genre"})
             fig.update_traces(marker_color=BRAND, textposition="outside", cliponaxis=False)
+            fig.update_xaxes(range=[0, sig["lift"].max() * 1.2])
             st.plotly_chart(style_fig(fig, 460), use_container_width=True)
             st.caption("Lift = share of this genre's titles with the tag ÷ share of all titles with it. "
                        "Tags on fewer than 2% of the genre are skipped.")
@@ -2627,6 +3079,7 @@ def page_genre() -> None:
         fig = px.bar(pair, x="share", y="genre", orientation="h", text=pair["share"].map("{:.0f}%".format),
                      labels={"share": f"% of {pick} titles that also carry the genre", "genre": ""})
         fig.update_traces(marker_color=ACCENT, textposition="outside", cliponaxis=False)
+        fig.update_xaxes(range=[0, pair["share"].max() * 1.2])
         st.plotly_chart(style_fig(fig, 460), use_container_width=True)
 
     st.write("")
@@ -2639,7 +3092,7 @@ def page_genre() -> None:
                                  "type_origin": "Origin", "url": "Link"}),
             hide_index=True, use_container_width=True, height=420,
             column_config={
-                "Title": st.column_config.TextColumn(width="large"),
+                "Title": st.column_config.TextColumn(width="medium"),
                 "Rating": st.column_config.NumberColumn(format="%.2f", width="small"),
                 "Votes": st.column_config.NumberColumn(format="%d", width="small"),
                 "Origin": st.column_config.TextColumn(width="small"),
@@ -2821,6 +3274,12 @@ def _tag_counts(version: str) -> pd.Series:
     return _load_lake("model/bridge_novel_tag", version).groupby("series_id").size()
 
 
+@st.cache_data(show_spinner=False, max_entries=2)
+def _tag_rarity(version: str) -> pd.Series:
+    """Titles per tag, so the lookup page orders a title's tags without recounting 600k rows."""
+    return _load_labels("bridge_novel_tag", "dim_tag", "tag_key", "tag", version)["tag"].astype(str).value_counts()
+
+
 def tag_neighbours(series_id: int, k: int = 6) -> pd.DataFrame:
     """Titles sharing the most tags with `series_id`, by Jaccard overlap of their tag sets."""
     version = lake_version()
@@ -2923,7 +3382,7 @@ def page_lookup() -> None:
     with right:
         st.markdown("**Story elements**")
         if title_tags:
-            rarity = tags["tag"].astype(str).value_counts()
+            rarity = _tag_rarity(lake_version())
             ordered = sorted(title_tags, key=lambda t: rarity.get(t, 0))
             st.markdown(chips(ordered[:24]), unsafe_allow_html=True)
             st.caption("Rarest first: the tags near the start set this title apart most.")
@@ -3174,10 +3633,12 @@ def page_lake() -> None:
         st.dataframe(
             batches[["batch", "ingested", "rows", "latency", "full"]].rename(columns={
                 "batch": "Batch", "ingested": "Ingested (UTC)", "rows": "Rows",
-                "latency": "Median latency (s)", "full": "Full-detail share"}),
+                "latency": "Latency (s)", "full": "Full detail"}),
             hide_index=True, use_container_width=True,
-            column_config={"Median latency (s)": st.column_config.NumberColumn(format="%.1f"),
-                           "Full-detail share": st.column_config.NumberColumn(format="%.2f"),
+            column_config={"Latency (s)": st.column_config.NumberColumn(
+                               format="%.1f", help="Median seconds from scrape to ingest"),
+                           "Full detail": st.column_config.NumberColumn(
+                               format="%.2f", help="Share of rows with full metadata"),
                            "Ingested (UTC)": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm:ss")},
         )
     st.caption("Each micro-batch is one trigger of the Structured Streaming job in "
@@ -3192,28 +3653,63 @@ PAGE_SIZES = [10, 25, 50, 100, 250]
 DERIVED_TEXT = {"corpus_raw", "corpus_clean", "synopsis_clean", "tokens", "synopsis_tokens"}
 
 
+def _read_clean_tier(tier: str) -> tuple[pd.DataFrame, list[str]]:
+    """One metadata tier, with list-of-string columns joined by ", " in Arrow, exactly as _cell shows them.
+
+    Kept as arrays, `tokens` and `synopsis_tokens` alone become ~8 million Python strings (~0.5 GB).
+    """
+    import pyarrow as pa
+    import pyarrow.compute as pc
+    import pyarrow.parquet as pq
+
+    bucket = SETTINGS.minio.bucket_clean
+    prefix = f"{DATASET_PREFIX}/metadata_tier={tier}/"
+    keys = sorted(o["Key"] for o in list_objects(bucket, prefix) if o["Key"].endswith(".parquet"))
+    if not keys:
+        raise FileNotFoundError(prefix)
+    client = get_s3_client(SETTINGS)
+    table = pa.concat_tables(
+        [pq.read_table(io.BytesIO(client.get_object(Bucket=bucket, Key=key)["Body"].read())) for key in keys],
+        promote_options="default",
+    )
+    joined = []
+    for i, field in enumerate(table.schema):
+        if (pa.types.is_list(field.type) or pa.types.is_large_list(field.type)) and (
+                pa.types.is_string(field.type.value_type) or pa.types.is_large_string(field.type.value_type)):
+            # Spark writes `string not null` elements, which binary_join has no kernel for.
+            column = table.column(i).cast(pa.list_(pa.string()))
+            table = table.set_column(i, field.name, pc.binary_join(column, ", "))
+            joined.append(field.name)
+    return table.to_pandas(), joined
+
+
 @st.cache_resource(show_spinner=False, max_entries=1)
 def _dataset(version: str) -> pd.DataFrame:
     """The whole clean table, both metadata tiers. A resource, not data: 300 MB is never copied per rerun."""
-    parts = []
+    parts, joined = [], set()
     for tier in ("full", "listing"):
         try:
-            part = read_parquet_dir(SETTINGS.minio.bucket_clean, f"{DATASET_PREFIX}/metadata_tier={tier}")
+            part, lists = _read_clean_tier(tier)
         except FileNotFoundError:
             continue
         except Exception as exc:
             raise DataUnavailable(str(exc)) from exc
         parts.append(part.assign(metadata_tier=tier))
+        joined.update(lists)
     if not parts:
         raise DataUnavailable(f"No parquet under {SETTINGS.minio.bucket_clean}/{DATASET_PREFIX}")
-    return pd.concat(parts, ignore_index=True)
+    frame = pd.concat(parts, ignore_index=True)
+    # Joined list columns stay unsortable and unsearched, as they were while still arrays.
+    frame.attrs["list_columns"] = sorted(joined)
+    return frame
 
 
 @st.cache_resource(show_spinner=False, max_entries=1)
 def _dataset_haystack(version: str) -> pd.Series:
     """Lowercase text of every reader-facing text column per row, built on the first search only."""
     frame = _dataset(version)
-    text_cols = [c for c in frame.columns if frame[c].dtype == object and c not in DERIVED_TEXT
+    skip = DERIVED_TEXT | set(frame.attrs.get("list_columns", ()))
+    text_cols = [c for c in frame.columns if frame[c].dtype == object and c not in skip
                  and isinstance(frame[c].dropna().iloc[0] if frame[c].notna().any() else "", str)]
     hay = frame[text_cols[0]].fillna("").astype(str).str.lower()
     for col in text_cols[1:]:
@@ -3223,9 +3719,11 @@ def _dataset_haystack(version: str) -> pd.Series:
 
 def _sortable(frame: pd.DataFrame) -> list[str]:
     """Columns with an order: list-valued cells (genre_list, tokens) have none."""
+    joined = set(frame.attrs.get("list_columns", ()))
+
     def scalar(col: str) -> bool:
         values = frame[col].dropna()
-        return values.empty or not isinstance(values.iloc[0], (list, tuple, np.ndarray))
+        return col not in joined and (values.empty or not isinstance(values.iloc[0], (list, tuple, np.ndarray)))
     return [c for c in frame.columns if scalar(c)]
 
 
@@ -3392,6 +3890,7 @@ PAGE = {
     "creators": st.Page(guarded(page_creators), title="Authors & Publishers", url_path="creators"),
     "warehouse": st.Page(guarded(page_warehouse), title="Data Warehouse", url_path="warehouse"),
     "graph": st.Page(guarded(page_graph), title="Relationship Graph", url_path="graph"),
+    "content_graph": st.Page(guarded(page_content_graph), title="Content Graph", url_path="similarity"),
     "lake": st.Page(guarded(page_lake), title="Lake Operations", url_path="lake"),
     "dataset": st.Page(guarded(page_dataset), title="Dataset", url_path="dataset"),
     "governance": st.Page(guarded(page_governance), title="Quality & Governance", url_path="governance"),
@@ -3402,14 +3901,14 @@ PAGE_ICON = {
     "overview": ":material/space_dashboard:", "lookup": ":material/search:", "studio": ":material/model_training:",
     "analytics": ":material/bar_chart:", "trends": ":material/trending_up:", "genre": ":material/category:",
     "tags": ":material/sell:", "creators": ":material/groups:", "dataset": ":material/table_rows:",
-    "lake": ":material/database:", "warehouse": ":material/schema:", "graph": ":material/account_tree:",
+    "lake": ":material/database:", "warehouse": ":material/schema:", "graph": ":material/account_tree:", "content_graph": ":material/hub:",
     "governance": ":material/verified_user:", "methodology": ":material/menu_book:",
 }
 PAGES = {
     "Discover": [PAGE[k] for k in ("overview", "lookup", "studio")],
     "Market insight": [PAGE[k] for k in ("analytics", "trends", "genre", "tags", "creators")],
-    "Data platform": [PAGE[k] for k in (("warehouse", "graph", "governance") if PUBLIC else
-                                       ("dataset", "lake", "warehouse", "graph", "governance"))],
+    "Data platform": [PAGE[k] for k in (("warehouse", "graph", "content_graph", "governance") if PUBLIC else
+                                       ("dataset", "lake", "warehouse", "graph", "content_graph", "governance"))],
     "About": [PAGE["methodology"]],
 }
 
@@ -3437,6 +3936,20 @@ def lake_status_html() -> str:
             f"Data lake connected{when}</div>")
 
 
+MOBILE_NAV_CLOSE = """<script>
+const doc = window.parent.document;
+if (!window.parent.__nlNavClose) {
+  window.parent.__nlNavClose = true;
+  doc.addEventListener("click", (event) => {
+    const link = event.target.closest('section[data-testid="stSidebar"] [data-testid="stPageLink"] a');
+    if (!link || !window.parent.matchMedia("(max-width: 767px)").matches) return;
+    setTimeout(() => doc.querySelector(
+      'section[data-testid="stSidebar"] [data-testid="stBaseButton-headerNoPadding"]')?.click(), 60);
+  }, true);
+}
+</script>"""
+
+
 def sidebar_nav() -> None:
     """Brand, one collapsible group per section, and the data-lake status."""
     keys = {id(page): key for key, page in PAGE.items()}
@@ -3451,6 +3964,9 @@ def sidebar_nav() -> None:
             for page in pages:
                 st.page_link(page, icon=PAGE_ICON[keys[id(page)]])
     st.markdown(lake_status_html(), unsafe_allow_html=True)
+    # Streamlit closes its own navigation on phones after a tap; page links in a
+    # custom sidebar do not, so the open sidebar would keep covering the page.
+    components.html(MOBILE_NAV_CLOSE, height=0)
 
 
 def main() -> None:

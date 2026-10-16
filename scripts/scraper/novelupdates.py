@@ -118,7 +118,11 @@ COOLDOWN_RANGE = (30.0, 60.0)
 #: `series-finder`: satu penelusuran dalam bisa mencakup seluruh katalog,
 #: terurut dari novel terpenting. Scrape lama berhenti di 5.000 baris bukan
 #: karena dibatasi situs, melainkan karena notebook-nya memasang `max_page=200`.
-DEEP_MAX_PAGES = 2000
+#:
+#: Per 2026-10-07 `rank=popular` berujung di hal 3.062 (~76.500 seri), jauh di
+#: atas batas lama 2.000. Diberi ruang untuk pertumbuhan katalog; penelusuran
+#: tetap berhenti sendiri setelah tiga halaman kosong.
+DEEP_MAX_PAGES = 3500
 GENRE_MAX_PAGES = 250
 
 #: Genre yang jumlahnya sudah di atas ambang ini TIDAK diberi penelusuran

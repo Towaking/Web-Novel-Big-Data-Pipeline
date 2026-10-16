@@ -3,6 +3,21 @@
 Artefak: `Model/artifacts/` · Dilatih pada 4.460 judul (dari 4.461; 1 baris
 tanpa sinyal teks) · Sumber: `s3a://clean-data/novels_clean`
 
+> **Status pemakaian (2026-10-15).** Aplikasi hanya menyajikan model ML klasik:
+> Logistic Regression, Linear SVM, Random Forest, dan ensemble SVM + Random
+> Forest (bawaan, dipilih dari makro-F1 OOF; probabilitas digabung di ruang
+> log-odds). Revisi 2026-10-15 memulihkan kata bersensor di teks latih, menyetel
+> ulang C dan bobot blok fitur dengan TPE, dan mengganti Head D dengan model
+> bertumpuk (skor ridge teks + tag multi-hot + bobot sampel). Pada katalog 39.660
+> judul: Head A ensemble F1 makro uji 0,612 (SVM sebelum revisi 0,591), P@3 0,801;
+> Head D MAE 0,325 dan R² 0,354 (konfigurasi lama 0,340 dan 0,307). Metode,
+> rujukan, dan seluruh angka uji ada di [peningkatan_model.md](peningkatan_model.md). Hybrid (encoder BGE) dan BiLSTM
+> tetap didokumentasikan di bawah sebagai riset, tidak disajikan, dan tidak
+> dilatih ulang secara bawaan (`DEFAULT_MODELS` di `Model/pipeline/models.py`;
+> minta lewat `PHASE4_MODELS` atau `Model/train.py --models`). Angka di bagian
+> bawah dokumen ini berasal dari katalog 4.460 judul; angka katalog 39.660 judul
+> ada di `Model/artifacts/metrics.json`, termasuk model neural di `excluded_models`.
+
 ---
 
 ## 1. Arsitektur dan alasan pemilihannya
@@ -19,11 +34,11 @@ Tiga sifat dataset menentukan pilihan arsitektur:
 corpus (title + synopsis + tags)
         │
    ┌────┴─────────────────────────────────────────┐
-   │ HEAD A — Genre Tagger (4 pilihan)            │  fitur: stemming +
+   │ HEAD A: Genre Tagger                         │  fitur: stemming +
    │  ├─ Logistic Regression                      │  blok TF-IDF terpisah +
-   │  ├─ Linear SVM (kalibrasi Platt)             │  metadata + ambang per genre
-   │  ├─ Hybrid TF-IDF + Embedding  ← terbaik     │  + blok padat BGE 384-d
-   │  └─ BiLSTM + Attention (PyTorch)             │
+   │  ├─ Linear SVM (kalibrasi Platt) ← bawaan    │  metadata + ambang per genre
+   │  ├─ Hybrid TF-IDF + Embedding  (riset)       │  + blok padat BGE 384-d
+   │  └─ BiLSTM + Attention (riset, PyTorch)      │
    └──────────────────────────────────────────────┘
         │
    TF-IDF 1–2 gram → TruncatedSVD 200-d (representasi bersama)
@@ -42,7 +57,7 @@ corpus (title + synopsis + tags)
 
 ---
 
-## 2. Head A — pelabelan genre (4 model yang dapat dipilih)
+## 2. Head A: pelabelan genre (2 model di aplikasi, 2 model riset)
 
 ### Rujukan penelitian
 

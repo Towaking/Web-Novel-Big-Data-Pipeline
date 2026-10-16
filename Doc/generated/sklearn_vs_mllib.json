@@ -1,0 +1,703 @@
+{
+  "generated_at": "2026-10-14T08:33:04",
+  "smoke": false,
+  "setup": {
+    "rows": 38983,
+    "train": 31186,
+    "test": 7797,
+    "classes": [
+      "CN",
+      "JP",
+      "KR"
+    ],
+    "cores": 2,
+    "k_star": 5000,
+    "k_rf": 100,
+    "k_tune": [
+      5000,
+      10000
+    ],
+    "dim_sklearn": 20061,
+    "dim_mllib": 20067,
+    "spark": "3.5.3"
+  },
+  "timing": {
+    "prep_sk": 10.265557254002488,
+    "prep_ml": 28.14770360499824,
+    "rank_sk": 0.10617207799805328,
+    "select_sk": 0.15696581999509363,
+    "select_ml": 2.4582100580009865
+  },
+  "feature_selection_curve": [
+    {
+      "k": 300,
+      "sk_macro_f1": 0.880142223742079,
+      "sk_fit_s": 0.8552529870066792,
+      "sk_iter": 131,
+      "ml_macro_f1": 0.8160249363666873,
+      "ml_fit_s": 4.121317549994274,
+      "ml_iter": 40
+    },
+    {
+      "k": 1000,
+      "sk_macro_f1": 0.9099792040064075,
+      "sk_fit_s": 1.2670907670035376,
+      "sk_iter": 141,
+      "ml_macro_f1": 0.8861402180521593,
+      "ml_fit_s": 7.812257598998258,
+      "ml_iter": 101
+    },
+    {
+      "k": 3000,
+      "sk_macro_f1": 0.9234751155280785,
+      "sk_fit_s": 1.6000792990016635,
+      "sk_iter": 119,
+      "ml_macro_f1": 0.9238192084712183,
+      "ml_fit_s": 11.923442407998664,
+      "ml_iter": 133
+    },
+    {
+      "k": 5000,
+      "sk_macro_f1": 0.929894981212766,
+      "sk_fit_s": 1.9466109880013391,
+      "sk_iter": 127,
+      "ml_macro_f1": 0.9285732757655389,
+      "ml_fit_s": 13.689269775000867,
+      "ml_iter": 145
+    },
+    {
+      "k": 10000,
+      "sk_macro_f1": 0.9304750872996719,
+      "sk_fit_s": 2.382512205003877,
+      "sk_iter": 129,
+      "ml_macro_f1": 0.9293155875749131,
+      "ml_fit_s": 21.662807448999956,
+      "ml_iter": 200
+    },
+    {
+      "k": "all",
+      "sk_macro_f1": 0.9318034900842914,
+      "sk_fit_s": 3.041686830998515,
+      "sk_iter": 124,
+      "ml_macro_f1": 0.9310437958558483,
+      "ml_fit_s": 19.364012245001504,
+      "ml_iter": 200
+    }
+  ],
+  "feature_selection_curve_rf": [
+    {
+      "k": 100,
+      "sk_macro_f1": 0.8157342070171976,
+      "sk_fit_s": 2.1357328270023572
+    },
+    {
+      "k": 300,
+      "sk_macro_f1": 0.8165035682165085,
+      "sk_fit_s": 2.395803245002753
+    },
+    {
+      "k": 1000,
+      "sk_macro_f1": 0.7942749887403447,
+      "sk_fit_s": 2.7670688209982472
+    },
+    {
+      "k": 3000,
+      "sk_macro_f1": 0.7738080089431937,
+      "sk_fit_s": 2.8708588250010507
+    }
+  ],
+  "results": [
+    {
+      "stage": "E1",
+      "framework": "scikit-learn",
+      "model": "A",
+      "algo": "Logistic Regression",
+      "fit_s": 3.1712401879995014,
+      "predict_s": 0.002679042001545895,
+      "accuracy": 0.951135051943055,
+      "macro_f1": 0.9384980163074186,
+      "weighted_f1": 0.9508959745488215,
+      "f1_CN": 0.9693354264782836,
+      "f1_JP": 0.9292701279157262,
+      "f1_KR": 0.9168884945282461,
+      "iters": 150,
+      "k": 5000
+    },
+    {
+      "stage": "E1",
+      "framework": "scikit-learn",
+      "model": "B",
+      "algo": "Naive Bayes",
+      "fit_s": 0.017009479997796007,
+      "predict_s": 0.0022022859993739985,
+      "accuracy": 0.9020135949724253,
+      "macro_f1": 0.8748767867410633,
+      "weighted_f1": 0.9016489480282033,
+      "f1_CN": 0.9414603441040705,
+      "f1_JP": 0.8548931383577053,
+      "f1_KR": 0.8282768777614139,
+      "k": 5000
+    },
+    {
+      "stage": "E1",
+      "framework": "scikit-learn",
+      "model": "C",
+      "algo": "Random Forest",
+      "fit_s": 3.5420846350025386,
+      "predict_s": 0.04331125799944857,
+      "accuracy": 0.8553289726818007,
+      "macro_f1": 0.8119330546843271,
+      "weighted_f1": 0.8482171323509435,
+      "f1_CN": 0.903056258516644,
+      "f1_JP": 0.792274678111588,
+      "f1_KR": 0.7404682274247492,
+      "k": 100
+    },
+    {
+      "stage": "E2",
+      "framework": "MLlib",
+      "model": "D",
+      "algo": "Logistic Regression",
+      "fit_s": 13.435350184001436,
+      "predict_s": 0.08804860399686731,
+      "accuracy": 0.9510067974862126,
+      "macro_f1": 0.9382461060795736,
+      "weighted_f1": 0.9507517096728207,
+      "f1_CN": 0.9692468619246862,
+      "f1_JP": 0.928060263653484,
+      "f1_KR": 0.9174311926605505,
+      "iters": 137,
+      "k": 5000
+    },
+    {
+      "stage": "E2",
+      "framework": "MLlib",
+      "model": "E",
+      "algo": "Naive Bayes",
+      "fit_s": 0.7398554920000606,
+      "predict_s": 0.12524346000282094,
+      "accuracy": 0.9035526484545338,
+      "macro_f1": 0.8770394847780655,
+      "weighted_f1": 0.9031396900357087,
+      "f1_CN": 0.9419408928945714,
+      "f1_JP": 0.8574652124858969,
+      "f1_KR": 0.8317123489537283,
+      "k": 5000
+    },
+    {
+      "stage": "E2",
+      "framework": "MLlib",
+      "model": "F",
+      "algo": "Random Forest",
+      "fit_s": 23.757480296000722,
+      "predict_s": 1.3995550250037923,
+      "accuracy": 0.7835064768500706,
+      "macro_f1": 0.7064972485693022,
+      "weighted_f1": 0.7681411711595982,
+      "f1_CN": 0.8610500143444583,
+      "f1_JP": 0.6709237973605789,
+      "f1_KR": 0.5875179340028694,
+      "k": 100
+    },
+    {
+      "stage": "E3",
+      "framework": "scikit-learn",
+      "model": "A",
+      "algo": "Logistic Regression",
+      "fit_s": 5.2154381275177,
+      "predict_s": 0.01215343899821164,
+      "accuracy": 0.9616519174041298,
+      "macro_f1": 0.9520425442453607,
+      "weighted_f1": 0.9615508584575293,
+      "f1_CN": 0.9754201680672269,
+      "f1_JP": 0.9426751592356688,
+      "f1_KR": 0.9380323054331865,
+      "k": 10000,
+      "tune_s": 53.516837485003634,
+      "cv_macro_f1": 0.9459635563066758,
+      "params": "{'C': 16.0}",
+      "iters": 200
+    },
+    {
+      "stage": "E3",
+      "framework": "scikit-learn",
+      "model": "B",
+      "algo": "Naive Bayes",
+      "fit_s": 0.10501861572265625,
+      "predict_s": 0.010557708999840543,
+      "accuracy": 0.9225343080672054,
+      "macro_f1": 0.8999295964090104,
+      "weighted_f1": 0.9223609293044676,
+      "f1_CN": 0.9551861981906165,
+      "f1_JP": 0.8787202380952381,
+      "f1_KR": 0.8658823529411764,
+      "k": 10000,
+      "tune_s": 1.6361563250029576,
+      "cv_macro_f1": 0.9050175545712066,
+      "params": "{'alpha': 0.001}"
+    },
+    {
+      "stage": "E3",
+      "framework": "scikit-learn",
+      "model": "C",
+      "algo": "Random Forest",
+      "fit_s": 8.307530879974365,
+      "predict_s": 0.06840373500017449,
+      "accuracy": 0.886879569065025,
+      "macro_f1": 0.8568974122901779,
+      "weighted_f1": 0.8840936642399801,
+      "f1_CN": 0.9252856131837024,
+      "f1_JP": 0.8429027113237639,
+      "f1_KR": 0.8025039123630673,
+      "k": 100,
+      "tune_s": 37.01453092399606,
+      "cv_macro_f1": 0.8610071579969437,
+      "params": "{'max_depth': 30}"
+    },
+    {
+      "stage": "E4",
+      "framework": "MLlib",
+      "model": "D",
+      "algo": "Logistic Regression",
+      "fit_s": 18.454716310996446,
+      "predict_s": 0.21376580499781994,
+      "accuracy": 0.9607541362062332,
+      "macro_f1": 0.9508639341265535,
+      "weighted_f1": 0.960583723186152,
+      "f1_CN": 0.9748638458315878,
+      "f1_JP": 0.9421487603305785,
+      "f1_KR": 0.9355791962174941,
+      "k": 10000,
+      "tune_s": 381.825680654998,
+      "cv_macro_f1": 0.9454619514828807,
+      "params": "{'C': 4.0}",
+      "iters": 152
+    },
+    {
+      "stage": "E4",
+      "framework": "MLlib",
+      "model": "E",
+      "algo": "Naive Bayes",
+      "fit_s": 2.4726776280003833,
+      "predict_s": 0.2644319640021422,
+      "accuracy": 0.9238168526356291,
+      "macro_f1": 0.9013587549279841,
+      "weighted_f1": 0.9236519076004658,
+      "f1_CN": 0.9561283534981588,
+      "f1_JP": 0.8790472646073688,
+      "f1_KR": 0.8689006466784245,
+      "k": 10000,
+      "tune_s": 44.801122357006534,
+      "cv_macro_f1": 0.9050334329987327,
+      "params": "{'alpha': 0.001}"
+    },
+    {
+      "stage": "E4",
+      "framework": "MLlib",
+      "model": "F",
+      "algo": "Random Forest",
+      "fit_s": 59.84351223100384,
+      "predict_s": 4.794957689999137,
+      "accuracy": 0.804155444401693,
+      "macro_f1": 0.7419733030276664,
+      "weighted_f1": 0.7957801931782401,
+      "f1_CN": 0.8745923510228284,
+      "f1_JP": 0.6917109024091466,
+      "f1_KR": 0.6596166556510245,
+      "k": 100,
+      "tune_s": 331.9522670860024,
+      "cv_macro_f1": 0.7441207032877398,
+      "params": "{'max_depth': 30}"
+    }
+  ],
+  "tuning_log": [
+    {
+      "framework": "scikit-learn",
+      "model": "A",
+      "algo": "Logistic Regression",
+      "k": 5000,
+      "params": "{'C': 1.0}",
+      "cv_macro_f1": 0.9284337984375391
+    },
+    {
+      "framework": "scikit-learn",
+      "model": "A",
+      "algo": "Logistic Regression",
+      "k": 10000,
+      "params": "{'C': 1.0}",
+      "cv_macro_f1": 0.9303929589611631
+    },
+    {
+      "framework": "scikit-learn",
+      "model": "A",
+      "algo": "Logistic Regression",
+      "k": 5000,
+      "params": "{'C': 4.0}",
+      "cv_macro_f1": 0.9416350260426759
+    },
+    {
+      "framework": "scikit-learn",
+      "model": "A",
+      "algo": "Logistic Regression",
+      "k": 10000,
+      "params": "{'C': 4.0}",
+      "cv_macro_f1": 0.9447073805914622
+    },
+    {
+      "framework": "scikit-learn",
+      "model": "A",
+      "algo": "Logistic Regression",
+      "k": 5000,
+      "params": "{'C': 16.0}",
+      "cv_macro_f1": 0.9430158616019367
+    },
+    {
+      "framework": "scikit-learn",
+      "model": "A",
+      "algo": "Logistic Regression",
+      "k": 10000,
+      "params": "{'C': 16.0}",
+      "cv_macro_f1": 0.9459635563066758
+    },
+    {
+      "framework": "scikit-learn",
+      "model": "A",
+      "algo": "Logistic Regression",
+      "k": 5000,
+      "params": "{'C': 64.0}",
+      "cv_macro_f1": 0.9420133429073841
+    },
+    {
+      "framework": "scikit-learn",
+      "model": "A",
+      "algo": "Logistic Regression",
+      "k": 10000,
+      "params": "{'C': 64.0}",
+      "cv_macro_f1": 0.9441394852965264
+    },
+    {
+      "framework": "scikit-learn",
+      "model": "A",
+      "algo": "Logistic Regression",
+      "k": 5000,
+      "params": "{'C': 256.0}",
+      "cv_macro_f1": 0.9393117032443893
+    },
+    {
+      "framework": "scikit-learn",
+      "model": "A",
+      "algo": "Logistic Regression",
+      "k": 10000,
+      "params": "{'C': 256.0}",
+      "cv_macro_f1": 0.9446240862129515
+    },
+    {
+      "framework": "scikit-learn",
+      "model": "B",
+      "algo": "Naive Bayes",
+      "k": 5000,
+      "params": "{'alpha': 0.001}",
+      "cv_macro_f1": 0.8996445443787139
+    },
+    {
+      "framework": "scikit-learn",
+      "model": "B",
+      "algo": "Naive Bayes",
+      "k": 10000,
+      "params": "{'alpha': 0.001}",
+      "cv_macro_f1": 0.9050175545712066
+    },
+    {
+      "framework": "scikit-learn",
+      "model": "B",
+      "algo": "Naive Bayes",
+      "k": 5000,
+      "params": "{'alpha': 0.01}",
+      "cv_macro_f1": 0.8972917119561662
+    },
+    {
+      "framework": "scikit-learn",
+      "model": "B",
+      "algo": "Naive Bayes",
+      "k": 10000,
+      "params": "{'alpha': 0.01}",
+      "cv_macro_f1": 0.9036736676568636
+    },
+    {
+      "framework": "scikit-learn",
+      "model": "B",
+      "algo": "Naive Bayes",
+      "k": 5000,
+      "params": "{'alpha': 0.1}",
+      "cv_macro_f1": 0.8896072449530891
+    },
+    {
+      "framework": "scikit-learn",
+      "model": "B",
+      "algo": "Naive Bayes",
+      "k": 10000,
+      "params": "{'alpha': 0.1}",
+      "cv_macro_f1": 0.8973869821163815
+    },
+    {
+      "framework": "scikit-learn",
+      "model": "B",
+      "algo": "Naive Bayes",
+      "k": 5000,
+      "params": "{'alpha': 1.0}",
+      "cv_macro_f1": 0.8702967567644673
+    },
+    {
+      "framework": "scikit-learn",
+      "model": "B",
+      "algo": "Naive Bayes",
+      "k": 10000,
+      "params": "{'alpha': 1.0}",
+      "cv_macro_f1": 0.8747722926492599
+    },
+    {
+      "framework": "scikit-learn",
+      "model": "C",
+      "algo": "Random Forest",
+      "k": 100,
+      "params": "{'max_depth': 10}",
+      "cv_macro_f1": 0.7607546279059839
+    },
+    {
+      "framework": "scikit-learn",
+      "model": "C",
+      "algo": "Random Forest",
+      "k": 100,
+      "params": "{'max_depth': 20}",
+      "cv_macro_f1": 0.8400426088692812
+    },
+    {
+      "framework": "scikit-learn",
+      "model": "C",
+      "algo": "Random Forest",
+      "k": 100,
+      "params": "{'max_depth': 30}",
+      "cv_macro_f1": 0.8610071579969437
+    },
+    {
+      "framework": "MLlib",
+      "model": "D",
+      "algo": "Logistic Regression",
+      "k": 5000,
+      "params": "{'C': 1.0}",
+      "cv_macro_f1": 0.9339549257594216
+    },
+    {
+      "framework": "MLlib",
+      "model": "D",
+      "algo": "Logistic Regression",
+      "k": 5000,
+      "params": "{'C': 4.0}",
+      "cv_macro_f1": 0.9429871441932441
+    },
+    {
+      "framework": "MLlib",
+      "model": "D",
+      "algo": "Logistic Regression",
+      "k": 5000,
+      "params": "{'C': 16.0}",
+      "cv_macro_f1": 0.941400586524444
+    },
+    {
+      "framework": "MLlib",
+      "model": "D",
+      "algo": "Logistic Regression",
+      "k": 5000,
+      "params": "{'C': 64.0}",
+      "cv_macro_f1": 0.937795289151672
+    },
+    {
+      "framework": "MLlib",
+      "model": "D",
+      "algo": "Logistic Regression",
+      "k": 5000,
+      "params": "{'C': 256.0}",
+      "cv_macro_f1": 0.9360282339727481
+    },
+    {
+      "framework": "MLlib",
+      "model": "D",
+      "algo": "Logistic Regression",
+      "k": 10000,
+      "params": "{'C': 1.0}",
+      "cv_macro_f1": 0.9361823573295948
+    },
+    {
+      "framework": "MLlib",
+      "model": "D",
+      "algo": "Logistic Regression",
+      "k": 10000,
+      "params": "{'C': 4.0}",
+      "cv_macro_f1": 0.9454619514828807
+    },
+    {
+      "framework": "MLlib",
+      "model": "D",
+      "algo": "Logistic Regression",
+      "k": 10000,
+      "params": "{'C': 16.0}",
+      "cv_macro_f1": 0.9450924378056511
+    },
+    {
+      "framework": "MLlib",
+      "model": "D",
+      "algo": "Logistic Regression",
+      "k": 10000,
+      "params": "{'C': 64.0}",
+      "cv_macro_f1": 0.943830602813136
+    },
+    {
+      "framework": "MLlib",
+      "model": "D",
+      "algo": "Logistic Regression",
+      "k": 10000,
+      "params": "{'C': 256.0}",
+      "cv_macro_f1": 0.9431036364253499
+    },
+    {
+      "framework": "MLlib",
+      "model": "E",
+      "algo": "Naive Bayes",
+      "k": 5000,
+      "params": "{'alpha': 0.001}",
+      "cv_macro_f1": 0.9001651435172917
+    },
+    {
+      "framework": "MLlib",
+      "model": "E",
+      "algo": "Naive Bayes",
+      "k": 5000,
+      "params": "{'alpha': 0.01}",
+      "cv_macro_f1": 0.8976026125511604
+    },
+    {
+      "framework": "MLlib",
+      "model": "E",
+      "algo": "Naive Bayes",
+      "k": 5000,
+      "params": "{'alpha': 0.1}",
+      "cv_macro_f1": 0.8905873519586759
+    },
+    {
+      "framework": "MLlib",
+      "model": "E",
+      "algo": "Naive Bayes",
+      "k": 5000,
+      "params": "{'alpha': 1.0}",
+      "cv_macro_f1": 0.8702450536288072
+    },
+    {
+      "framework": "MLlib",
+      "model": "E",
+      "algo": "Naive Bayes",
+      "k": 10000,
+      "params": "{'alpha': 0.001}",
+      "cv_macro_f1": 0.9050334329987327
+    },
+    {
+      "framework": "MLlib",
+      "model": "E",
+      "algo": "Naive Bayes",
+      "k": 10000,
+      "params": "{'alpha': 0.01}",
+      "cv_macro_f1": 0.9039710543222391
+    },
+    {
+      "framework": "MLlib",
+      "model": "E",
+      "algo": "Naive Bayes",
+      "k": 10000,
+      "params": "{'alpha': 0.1}",
+      "cv_macro_f1": 0.8984693078231868
+    },
+    {
+      "framework": "MLlib",
+      "model": "E",
+      "algo": "Naive Bayes",
+      "k": 10000,
+      "params": "{'alpha': 1.0}",
+      "cv_macro_f1": 0.8762450067945995
+    },
+    {
+      "framework": "MLlib",
+      "model": "F",
+      "algo": "Random Forest",
+      "k": 100,
+      "params": "{'max_depth': 10}",
+      "cv_macro_f1": 0.6596370036550693
+    },
+    {
+      "framework": "MLlib",
+      "model": "F",
+      "algo": "Random Forest",
+      "k": 100,
+      "params": "{'max_depth': 20}",
+      "cv_macro_f1": 0.7320325591466373
+    },
+    {
+      "framework": "MLlib",
+      "model": "F",
+      "algo": "Random Forest",
+      "k": 100,
+      "params": "{'max_depth': 30}",
+      "cv_macro_f1": 0.7441207032877398
+    }
+  ],
+  "scaling": [
+    {
+      "kali_data": 0.25,
+      "baris": 7923,
+      "sklearn_s": 0.5746804390000761,
+      "mllib_s": 6.995412209005735,
+      "rasio": 12.172699354753588,
+      "iter_sklearn": 100,
+      "iter_mllib": 200,
+      "rasio_per_iterasi": 6.086349677376795
+    },
+    {
+      "kali_data": 0.5,
+      "baris": 15749,
+      "sklearn_s": 1.259370460997161,
+      "mllib_s": 8.105445731001964,
+      "rasio": 6.436109137087532,
+      "iter_sklearn": 118,
+      "iter_mllib": 193,
+      "rasio_per_iterasi": 3.93503045687217
+    },
+    {
+      "kali_data": 1.0,
+      "baris": 31186,
+      "sklearn_s": 3.0426936670046416,
+      "mllib_s": 7.877317637001397,
+      "rasio": 2.5889289225609646,
+      "iter_sklearn": 150,
+      "iter_mllib": 137,
+      "rasio_per_iterasi": 2.8345937108331727
+    },
+    {
+      "kali_data": 2.0,
+      "baris": 62372,
+      "sklearn_s": 6.168251707000309,
+      "mllib_s": 11.587639574994682,
+      "rasio": 1.8785938261637323,
+      "iter_sklearn": 159,
+      "iter_mllib": 125,
+      "rasio_per_iterasi": 2.3895713468802673
+    },
+    {
+      "kali_data": 4.0,
+      "baris": 124744,
+      "sklearn_s": 15.192735351003648,
+      "mllib_s": 21.651897951996943,
+      "rasio": 1.4251481021530856,
+      "iter_sklearn": 200,
+      "iter_mllib": 133,
+      "rasio_per_iterasi": 2.143079852861783
+    }
+  ]
+}

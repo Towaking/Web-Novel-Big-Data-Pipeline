@@ -19,6 +19,8 @@ sinopsis ruang IDF-nya sendiri.
 
 from __future__ import annotations
 
+import numpy as np
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.compose import ColumnTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.feature_selection import SelectKBest, chi2
@@ -85,6 +87,33 @@ def build_feature_union(config: FeatureConfig | None = None) -> ColumnTransforme
         transformer_weights=weights,
         sparse_threshold=1.0,
     )
+
+
+class MultiLabelChi2Selector(BaseEstimator, TransformerMixin):
+    """
+    Pilih `k` fitur dengan skor chi-kuadrat tertinggi di genre mana pun.
+
+    Untuk Random Forest: sqrt(p) fitur acak dari ratusan ribu kolom jarang hampir
+    selalu kolom nol. Skornya maksimum lintas genre agar penanda genre langka ikut.
+    """
+
+    def __init__(self, k: int = 3000):
+        self.k = k
+
+    def fit(self, X, y):
+        labels = np.asarray(y)
+        if labels.ndim == 1:
+            labels = labels[:, None]
+        scores = np.zeros(X.shape[1])
+        for column in range(labels.shape[1]):
+            chi, _ = chi2(X, labels[:, column])
+            scores = np.maximum(scores, np.nan_to_num(chi))
+        keep = min(self.k, X.shape[1])
+        self.support_ = np.sort(np.argsort(-scores, kind="mergesort")[:keep])
+        return self
+
+    def transform(self, X):
+        return X[:, self.support_]
 
 
 def label_specific_selector(k: int):

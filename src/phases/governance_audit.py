@@ -373,11 +373,16 @@ def audit_privacy(auditor: Auditor, spark: SparkSession) -> list[dict]:
     )
 
     # Nama orang yang dipublikasikan
+    blank = next((
+        df.agg(F.avg(F.when(F.col("artists").isNull()
+                            | F.lower(F.trim("artists")).isin("unknown", "n/a", ""), 1).otherwise(0))).first()[0]
+        for df in frames.values() if "artists" in df.columns), None)
+    artists_note = f"{100 * blank:.2f}% kosong atau Unknown".replace(".", ",") if blank is not None else "hampir seluruhnya kosong"
     auditor.add(
         PRIVACY, "PRV-04", "Nama orang yang ikut terproses",
         INFO,
         "kolom `authors` memuat nama pena yang dipublikasikan platform sebagai kredit "
-        "karya (bukan identitas privat); `artists` dibuang di Fase 2 karena 84,67% Unknown",
+        f"karya (bukan identitas privat); `artists` dibuang di Fase 2 karena {artists_note}",
         "Nama pena tetap data pribadi bila dapat dikaitkan ke orang nyata — dasar "
         "pemrosesannya perlu dinyatakan di Bab 3.3.",
     )

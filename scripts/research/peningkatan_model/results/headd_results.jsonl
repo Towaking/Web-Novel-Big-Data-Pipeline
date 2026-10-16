@@ -1,0 +1,18 @@
+{"name": "d0_baseline", "mae": 0.3371, "rmse": 0.4293, "r2": 0.3116, "baseline_mae": 0.4151, "improvement_pct": 18.79, "cv_mae": 0.3397}
+{"name": "d1_uncensor", "mae": 0.3377, "rmse": 0.4301, "r2": 0.3088, "baseline_mae": 0.4151, "improvement_pct": 18.65, "cv_mae": 0.3385}
+{"name": "d2_ridge_only_a1.0", "mae": 0.3412, "rmse": 0.4312, "r2": 0.3055, "baseline_mae": 0.4151, "improvement_pct": 17.8, "oof_mae": 0.3424}
+{"name": "d2_hgb_plus_ridge_a1.0", "mae": 0.3327, "rmse": 0.4213, "r2": 0.337, "baseline_mae": 0.4151, "improvement_pct": 19.85, "cv_mae": 0.3349}
+{"name": "d2_ridge_only_a3.0", "mae": 0.3361, "rmse": 0.4265, "r2": 0.3205, "baseline_mae": 0.4151, "improvement_pct": 19.03, "oof_mae": 0.3378}
+{"name": "d2_hgb_plus_ridge_a3.0", "mae": 0.3302, "rmse": 0.4189, "r2": 0.3444, "baseline_mae": 0.4151, "improvement_pct": 20.45, "cv_mae": 0.3323}
+{"name": "d2_ridge_only_a10.0", "mae": 0.3417, "rmse": 0.434, "r2": 0.2964, "baseline_mae": 0.4151, "improvement_pct": 17.68, "oof_mae": 0.344}
+{"name": "d2_hgb_plus_ridge_a10.0", "mae": 0.3301, "rmse": 0.4188, "r2": 0.3446, "baseline_mae": 0.4151, "improvement_pct": 20.48, "cv_mae": 0.3322}
+{"name": "d3_ridge3_w_log1p", "mae": 0.3285, "rmse": 0.4193, "r2": 0.3431, "baseline_mae": 0.4151, "improvement_pct": 20.86, "cv_mae": 0.3311, "secs": 7.6}
+{"name": "d3_ridge3_w_shrink20", "mae": 0.3284, "rmse": 0.4195, "r2": 0.3424, "baseline_mae": 0.4151, "improvement_pct": 20.89, "cv_mae": 0.3313, "secs": 10.9}
+{"name": "d3_ridge3_w_sqrt", "mae": 0.329, "rmse": 0.4225, "r2": 0.3332, "baseline_mae": 0.4151, "improvement_pct": 20.74, "cv_mae": 0.3314, "secs": 13.3}
+{"name": "d4_ridge3_abs", "mae": 0.3321, "rmse": 0.4241, "r2": 0.3282, "baseline_mae": 0.4151, "improvement_pct": 20.0, "cv_mae": 0.3321, "secs": 14.7}
+{"name": "d5_rf_n300_leaf5_mf0.3", "mae": 0.3308, "rmse": 0.4197, "r2": 0.3418, "baseline_mae": 0.4151, "improvement_pct": 20.31, "cv_mae": 0.333, "secs": 320.3}
+{"name": "d5_et_n300_leaf5_mf0.3", "mae": 0.3329, "rmse": 0.4215, "r2": 0.3362, "baseline_mae": 0.4151, "improvement_pct": 19.8, "cv_mae": 0.3334, "secs": 29.0}
+{"name": "d6_ridge3_tagsmh", "mae": 0.3288, "rmse": 0.4173, "r2": 0.3494, "baseline_mae": 0.4151, "improvement_pct": 20.79, "cv_mae": 0.3311, "secs": 22.4}
+{"name": "d7_combo_default", "mae": 0.3279, "rmse": 0.4189, "r2": 0.3445, "baseline_mae": 0.4151, "improvement_pct": 21.01, "cv_mae": 0.3307}
+{"name": "d7_combo_default", "mae": 0.3279, "rmse": 0.4189, "r2": 0.3445, "baseline_mae": 0.4151, "improvement_pct": 21.01, "cv_mae": 0.3311}
+{"name": "d8_combo_tpe", "mae": 0.3247, "rmse": 0.415, "r2": 0.3566, "baseline_mae": 0.4151, "improvement_pct": 21.78, "cv_mae": 0.3284, "params": {"learning_rate": 0.0212345819361074, "max_leaf_nodes": 33, "max_depth": null, "min_samples_leaf": 43, "l2_regularization": 0.0014426643266066033, "max_features": 0.20411368626214166}, "n_iter": 307}

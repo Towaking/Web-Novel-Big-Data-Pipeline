@@ -97,18 +97,25 @@ Antarmuka:
 ## Melatih Ulang Model
 
 Skrip [Model/train.py](Model/train.py) melatih ulang model tanpa menjalankan
-seluruh pipeline. Arsitektur yang tidak diminta tetap dipertahankan dari
-artefak lama, jadi melatih satu model tidak menghapus yang lain.
+seluruh pipeline. Tanpa `--models`, Head A melatih model ML klasik yang disajikan
+AI Studio: `logreg`, `svm`, `rf`, dan `ensemble` (rata-rata log-odds berbobot svm + rf).
+Arsitektur yang diminta lewat `--models` digabung dengan artefak lama, jadi
+melatih satu model tidak menghapus yang lain; ensemble lama dibuang bila salah
+satu anggotanya dilatih ulang sendirian.
 
 ```bash
-docker compose exec pipeline python Model/train.py                        # semua head
+docker compose exec -e PHASE4_N_JOBS=10 pipeline python Model/train.py   # semua head, 10 worker
 docker compose exec pipeline python Model/train.py --only genre           # Head A saja
-docker compose exec pipeline python Model/train.py --models hybrid        # satu arsitektur
-docker compose exec pipeline python Model/train.py --models bilstm --epochs 5   # uji cepat
+docker compose exec pipeline python Model/train.py --models svm           # satu arsitektur
 docker compose restart streamlit                                          # muat artefak baru
 ```
 
-Arsitektur yang tersedia: `logreg`, `svm`, `hybrid`, `bilstm`.
+`PHASE4_N_JOBS` (bawaan 2) mengatur worker latih paralel; dengan 10 worker Fase 4
+penuh selesai sekitar 15 menit.
+
+Arsitektur di katalog: `logreg`, `svm`, `rf`, `ensemble`, serta `hybrid` dan
+`bilstm` (model neural untuk riset; hanya dilatih bila diminta lewat `--models`
+atau `PHASE4_MODELS`, dan tidak dipakai aplikasi).
 
 Menambah kapasitas worker:
 
@@ -356,7 +363,7 @@ dibaca sebelum menulis kode fase mana pun.
 | 1    | Collect — ingest CSV ke`raw-data`                                 | 4.461 baris + manifest checksum         | ✅     |
 | 2    | Clean — join sinopsis, sentinel handling, dedup, text preprocessing | 4.461 baris Parquet, 98,45% bersinopsis | ✅     |
 | 3    | Explore — 5 blok analitik Spark SQL                                 | 16 tabel di`curated-data/analytics/`  | ✅     |
-| 4    | Model — 4 model genre + 3 head lain                                 | artefak di`Model/artifacts/`          | ✅     |
+| 4    | Model: 2 model genre ML klasik + 3 head lain                         | artefak di`Model/artifacts/`          | ✅     |
 | 5    | Deploy — dashboard NovelLens (produk + data platform: warehouse OLAP, graf, tata kelola) | 7 halaman Streamlit | ✅     |
 | —   | Tata kelola — inventaris elemen, model data, audit                  | 17 tabel + 2 dokumen                    | ✅     |
 | —   | Big Data — variety, HDFS, MapReduce, Structured Streaming, analisis graf, audit konsep | 4 job MapReduce (4/4 cocok Spark, 100% data-local), 24/26 konsep terpenuhi | ✅     |
@@ -413,20 +420,34 @@ dan [Doc/generated/governance_audit.md](Doc/generated/governance_audit.md)
 
 **Model (Fase 4)** — detail di [Doc/model_card.md](Doc/model_card.md)
 
-Head A menyediakan **empat model yang bisa dipilih pengguna** di dashboard —
-dua baseline berbasis fitur, satu arsitektur hybrid, dan satu model deep
-learning yang direplikasi dari literatur. Semuanya dilatih dan diuji pada
-pembagian data identik (80% pengembangan / 20% uji; ambang dan hyperparameter
-dipilih lewat OOF cross-validation):
+Head A di dashboard menyediakan **tiga model ML klasik dan satu ensemble** yang
+bisa dipilih pengguna, semuanya di atas fitur TF-IDF tanpa jaringan saraf. Model
+bawaan dipilih dari F1 makro OOF. Angka berikut dari katalog 39.660 judul, 35
+genre, 7.932 judul uji (80% pengembangan / 20% uji; ambang dan hyperparameter
+dipilih lewat OOF cross-validation), setelah revisi 2026-10-15
+([Doc/peningkatan_model.md](Doc/peningkatan_model.md)):
 
-| Model genre                                    | F1 makro        | F1 mikro        | P@3             | Hamming ↓      |
-| ---------------------------------------------- | --------------- | --------------- | --------------- | --------------- |
-| **Hybrid TF-IDF + Embedding (terpilih)** | **0,536** | **0,650** | **0,781** | **0,134** |
-| Linear SVM                                     | 0,527           | 0,648           | 0,765           | 0,137           |
-| Logistic Regression                            | 0,517           | 0,638           | 0,755           | 0,141           |
-| BiLSTM + Attention (deep learning)             | 0,456           | 0,591           | 0,663           | 0,173           |
+| Model genre                                    | F1 makro OOF    | F1 makro uji    | F1 mikro        | P@3             | Hamming ↓      |
+| ---------------------------------------------- | --------------- | --------------- | --------------- | --------------- | --------------- |
+| **Ensemble SVM + Random Forest (bawaan)**      | **0,606**       | **0,612**       | **0,674**       | 0,801           | 0,106           |
+| Linear SVM                                     | 0,602           | 0,609           | 0,672           | **0,802**       | **0,106**       |
+| Logistic Regression                            | 0,597           | 0,603           | 0,667           | 0,795           | 0,109           |
+| Random Forest                                  | 0,549           | 0,552           | 0,630           | 0,741           | 0,124           |
+| Linear SVM sebelum revisi                      | 0,583           | 0,591           | 0,654           | 0,788           | 0,114           |
+| Hybrid BGE (fitur lama, tidak disajikan)       | 0,591           | 0,597           | 0,657           | 0,792           | 0,113           |
+| BiLSTM (fitur lama, tidak disajikan)           | 0,542           | 0,550           | 0,629           | 0,682           | 0,125           |
 
-**Apa yang baru: blok embedding pralatih.** Versi sebelumnya menutup jalur
+Kenaikan terbesar datang dari penyetelan ulang regularisasi dan bobot blok fitur
+(TPE), bukan dari model yang lebih rumit: model ML klasik kini melampaui Hybrid
+dengan encoder BGE. Diuji pada lima pembagian data, ensemble unggul +0,023 F1
+makro atas SVM lama di kelima pembagian. Random Forest lebih lemah sendirian,
+tetapi kesalahannya berbeda dari SVM sehingga gabungan keduanya menjadi yang
+terbaik. Penggabungannya di ruang log-odds: rata-rata probabilitas biasa
+menurunkan P@3 secara bermakna, sedangkan log-odds hanya -0,001 (tidak
+bermakna) dengan P@1 tertinggi (0,904).
+
+**Riset yang tidak dipakai aplikasi: blok embedding pralatih.** Uji berikut
+dijalankan pada katalog lama 4.460 judul. Versi sebelumnya menutup jalur
 transformer dengan alasan "lingkungan ini offline". Premis itu diuji ulang dan
 ternyata **salah** — model pralatih dapat diunduh, dan sekarang bobotnya
 di-*bake* ke dalam image sehingga inferensi tetap tidak butuh jaringan.
@@ -475,15 +496,14 @@ dengan alasan diterima/ditolak di [Doc/model_card.md](Doc/model_card.md).
 
 | Head | Tugas                       | Metrik utama                                             |
 | ---- | --------------------------- | -------------------------------------------------------- |
-| B    | Content-based recommender   | Genre overlap@10**0,939**                          |
-| C    | Klasterisasi arketipe       | k=5, silhouette 0,017                                    |
-| D    | Estimasi rating dari konten | MAE**0,416** (baseline 0,454), R² **0,167** |
+| B    | Content-based recommender   | Genre overlap@10 **0,949**                               |
+| C    | Klasterisasi arketipe       | k=7, silhouette 0,029                                    |
+| D    | Estimasi rating dari konten | MAE **0,325** (tebak rata-rata 0,415), R² **0,354**      |
 
-Head D naik dari R² 0,147 → **0,167** setelah fitur kecepatan rilis
-ditambahkan. Diuji terpisah pada pembagian yang dikunci, sumbangan fitur itu
-**campuran**: R² +0,016 tetapi MAE justru +0,005. Dipertahankan karena R²
-paling relevan untuk pertanyaan "apa yang menjelaskan penerimaan pembaca",
-tetapi keunggulannya tidak seragam.
+Head D (revisi 2026-10-15) menumpuk skor ridge teks out-of-fold, tag multi-hot,
+dan bobot sampel menurut jumlah suara di atas HistGradientBoosting yang disetel
+dengan TPE. Konfigurasi lama pada baris latih yang sama: MAE 0,340, R² 0,307.
+Keduanya dievaluasi dengan TF-IDF dan SVD yang di-fit tanpa baris uji.
 
 Head C berpindah dari k=9 ke k=5 — bukan karena datanya berubah, melainkan
 karena silhouette-nya rata (0,0153–0,0169 untuk k=5..10). **Pemilihan `k` pada

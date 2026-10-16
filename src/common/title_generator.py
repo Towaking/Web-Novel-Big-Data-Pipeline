@@ -3,22 +3,23 @@ Generator ide judul berbasis pola katalog
 =========================================
 Judul web novel sangat formulaik ("Reborn as ...", "... System", "The
 Villainess ..."). Modul ini mempelajari pola itu langsung dari judul-judul
-katalog dengan model Markov kata orde-2, lalu mengondisikannya pada cerita
-pengguna:
+katalog lalu mengondisikannya pada cerita pengguna. Bobot tiap judul katalog
+berasal dari kemiripan sinopsisnya dengan deskripsi pengguna (ruang embedding
+Fase 4), kecocokan genre, dan negara asal (gaya judul CN/KR/JP berbeda jauh).
 
-1. Bobot judul: tiap judul katalog diberi bobot dari kemiripan sinopsisnya
-   dengan deskripsi pengguna (ruang embedding Fase 4), kecocokan genre, dan
-   negara asal (gaya judul CN/KR/JP berbeda jauh).
-2. Transisi kata dihitung ulang dengan bobot tersebut, jadi frasa dari novel
-   yang mirip lebih sering terpakai.
-3. Kata yang muncul di deskripsi dan pernah dipakai di judul katalog diberi
-   dorongan tambahan saat sampling.
-4. Kandidat disaring (bukan salinan judul yang sudah ada, tidak menyalin
-   frasa panjang yang unik milik satu judul) lalu diberi skor relevansi +
-   kelancaran dan dipilih yang beragam.
+Dua sumber kandidat:
 
-Tidak ada model bahasa: setiap pasangan tiga kata di judul hasil pernah muncul
-di katalog. Itu sumber "pola dataset"-nya, sekaligus batasannya.
+1. Kerangka katalog (`title_templates.py`, sumber utama): kerangka judul yang
+   berulang diisi kata dan frasa cerita yang perannya cocok. Tata bahasanya
+   utuh dari judul nyata.
+2. Model Markov kata orde-2 (penambal bila kerangka yang cocok kurang):
+   sebagian kandidat ditambatkan pada kata cerita, rantai ditarik maju DAN
+   mundur dari kemunculan kata itu; kandidat dinilai dari relevansi,
+   kelancaran, sambungan terlemah, dan apakah 4-gram di titik sambung pernah
+   ada di katalog, karena judul rusak hampir selalu rusak di satu sambungan.
+
+Panjang judul tidak dibatasi, dan judul asal tidak ditampilkan. Tidak ada
+model bahasa: kerangka, peran kata, dan trigram semuanya berasal dari katalog.
 """
 
 from __future__ import annotations
@@ -29,6 +30,8 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+
+from src.common.title_templates import TemplateTitles
 
 BOS, EOS = "<s>", "</s>"
 
@@ -48,6 +51,9 @@ DANGLING = SMALL_WORDS | {"i", "my", "your", "his", "her", "their", "our", "its"
 TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:['\-][A-Za-z0-9]+)*|[,:!?]")
 PUNCT = {",", ":", "!", "?"}
 NGRAM_COPY = 5  # frasa sepanjang ini yang hanya dimiliki satu judul = menyalin
+#: Jaring pengaman terhadap rantai yang berputar, bukan batas gaya: judul
+#: katalog terpanjang 66 token.
+MAX_TOKENS = 80
 
 
 def tokenize_title(title: str) -> list[str]:
@@ -65,7 +71,19 @@ def _content(tokens: list[str]) -> set[str]:
 class TitleIdea:
     title: str
     relevance: float
-    sources: list[str]
+
+
+class _Chain:
+    """Transisi orde-2 terurut per state, untuk sampling berbobot per judul asal."""
+
+    def __init__(self, s1: np.ndarray, s2: np.ndarray, nxt: np.ndarray, title_idx: np.ndarray):
+        order = np.lexsort((s2, s1))
+        self.s1, self.s2 = s1[order], s2[order]
+        self.nxt, self.title_idx = nxt[order], title_idx[order]
+        self.starts: dict[tuple, tuple[int, int]] = {}
+        for i, key in enumerate(zip(self.s1.tolist(), self.s2.tolist())):
+            lo, _ = self.starts.get(key, (i, i))
+            self.starts[key] = (lo, i + 1)
 
 
 class TitleGenerator:
@@ -76,7 +94,7 @@ class TitleGenerator:
         titles = self.catalog["title"].astype(str).tolist()
 
         surface: dict[str, Counter] = {}
-        rows_state, rows_next, rows_title = [], [], []
+        fwd, bwd = [], []  # (s1, s2, nxt, title_idx) sebagai kata
         ngram_owner: dict[tuple, set] = {}
         self.title_tokens: list[list[str]] = []
         for idx, title in enumerate(titles):
@@ -88,10 +106,9 @@ class TitleGenerator:
             for r, lo in zip(raw, low):
                 surface.setdefault(lo, Counter())[r] += 1
             seq = [BOS, BOS] + low + [EOS]
-            for i in range(2, len(seq)):
-                rows_state.append((seq[i - 2], seq[i - 1]))
-                rows_next.append(seq[i])
-                rows_title.append(idx)
+            fwd.extend((seq[i - 2], seq[i - 1], seq[i], idx) for i in range(2, len(seq)))
+            rev = [EOS, EOS] + low[::-1] + [BOS]
+            bwd.extend((rev[i - 2], rev[i - 1], rev[i], idx) for i in range(2, len(rev)))
             for i in range(len(low) - NGRAM_COPY + 1):
                 ngram_owner.setdefault(tuple(low[i:i + NGRAM_COPY]), set()).add(idx)
 
@@ -107,36 +124,52 @@ class TitleGenerator:
             " ".join(toks[:k]) for toks in self.title_tokens for k in range(2, len(toks))
         }
         self.unique_ngrams = {g for g, owners in ngram_owner.items() if len(owners) == 1}
+        # 4-gram yang pernah ada (dengan batas awal/akhir judul), penguji
+        # sambungan: trigram selalu lolos di titik sambung karena memang begitu
+        # judul dirakit, tetapi 4-gram yang melintasinya menunjukkan apakah
+        # sambungan itu pernah terjadi di judul asli.
+        self.fourgrams = {
+            tuple(seq[i:i + 4])
+            for toks in self.title_tokens if len(toks) >= 2
+            for seq in [[BOS] + toks + [EOS]]
+            for i in range(len(seq) - 3)
+        }
 
-        frame = pd.DataFrame({
-            "s1": [s[0] for s in rows_state], "s2": [s[1] for s in rows_state],
-            "nxt": rows_next, "title_idx": rows_title,
-        })
-        self.vocab = sorted(set(frame["nxt"]) | {BOS})
-        index = {w: i for i, w in enumerate(self.vocab)}
-        self.word_id = index
-        frame["s1"] = frame["s1"].map(index)
-        frame["s2"] = frame["s2"].map(index)
-        frame["nxt"] = frame["nxt"].map(index)
-        self.transitions = frame.sort_values(["s1", "s2"]).reset_index(drop=True)
-        self._title_idx = self.transitions["title_idx"].to_numpy()
-        self._nxt = self.transitions["nxt"].to_numpy()
-        # Rentang baris per state (s1, s2); transitions sudah terurut per state.
-        self._starts: dict[tuple, tuple[int, int]] = {}
-        for i, key in enumerate(zip(self.transitions["s1"].to_numpy(), self.transitions["s2"].to_numpy())):
-            lo, _ = self._starts.get(key, (i, i))
-            self._starts[key] = (lo, i + 1)
+        self.vocab = sorted({row[2] for row in fwd} | {BOS, EOS})
+        self.word_id = {w: i for i, w in enumerate(self.vocab)}
+        self._v = len(self.vocab)
 
-        # Model orde-1 (cadangan) dan model global tanpa bobot (skor kelancaran).
-        v = len(self.vocab)
-        self._v = v
-        bigram = Counter(zip(frame["s2"], frame["nxt"]))
-        self._bigram_global = bigram
-        self._from_count = Counter(frame["s2"])
-        self._trigram_global = Counter(zip(frame["s1"], frame["s2"], frame["nxt"]))
-        self._state_count = Counter(zip(frame["s1"], frame["s2"]))
-        # Kata yang pernah dipakai di judul: hanya kata ini yang bisa didorong.
+        def encode(rows):
+            arr = np.array([[self.word_id[a], self.word_id[b], self.word_id[c], t] for a, b, c, t in rows],
+                           dtype=np.int64)
+            return arr[:, 0], arr[:, 1], arr[:, 2], arr[:, 3]
+
+        f1, f2, fn, ft = encode(fwd)
+        self.forward = _Chain(f1, f2, fn, ft)
+        self.backward = _Chain(*encode(bwd))
+
+        # Model global tanpa bobot (skor kelancaran): trigram + cadangan bigram.
+        self._trigram_global = Counter(zip(f1.tolist(), f2.tolist(), fn.tolist()))
+        self._state_count = Counter(zip(f1.tolist(), f2.tolist()))
+        self._bigram_global = Counter(zip(f2.tolist(), fn.tolist()))
+        self._from_count = Counter(f2.tolist())
+
+        # Indeks terbalik kata -> (judul, posisi), untuk menambatkan judul pada
+        # kata cerita pengguna.
+        self.occurrences: dict[str, list[tuple[int, int]]] = {}
+        for idx, toks in enumerate(self.title_tokens):
+            if len(toks) < 2:
+                continue
+            for pos, tok in enumerate(toks):
+                if tok not in FUNCTION_WORDS and tok not in PUNCT:
+                    self.occurrences.setdefault(tok, []).append((idx, pos))
         self.title_vocab = set(self.vocab) - {BOS, EOS}
+
+        self.frames = TemplateTitles(
+            self.title_tokens,
+            lambda w: w not in FUNCTION_WORDS and w not in PUNCT and len(w) > 1 and not w.isdigit(),
+            BOS, EOS,
+        )
 
     # Pembobotan
     def title_weights(
@@ -144,7 +177,7 @@ class TitleGenerator:
         similarity: np.ndarray | None,
         genres: list[str] | None = None,
         origin: str | None = None,
-        focus: int = 60,
+        focus: int = 80,
     ) -> np.ndarray:
         """
         Bobot tiap judul katalog. Semua judul tetap punya bobot dasar supaya
@@ -171,38 +204,81 @@ class TitleGenerator:
         return weight
 
     # Generasi
-    def _sample(self, edge_weight, starts, boost, rng, max_len=16):
+    def _walk(self, chain: _Chain, state: tuple[int, int], edge_weight, boost, rng, stop: int):
+        """Tarik rantai dari `state` sampai simbol `stop`; None bila buntu."""
         tokens, sources = [], []
-        s1 = s2 = self.word_id[BOS]
-        for _ in range(max_len):
-            lo, hi = starts.get((s1, s2), (0, 0))
+        s1, s2 = state
+        for _ in range(MAX_TOKENS):
+            lo, hi = chain.starts.get((s1, s2), (0, 0))
             if hi <= lo:
                 return None, None
-            nxt = self._nxt[lo:hi]
-            w = edge_weight[lo:hi] * boost[nxt]
-            if w.sum() <= 0:
+            w = edge_weight[chain.title_idx[lo:hi]] * boost[chain.nxt[lo:hi]]
+            total = w.sum()
+            if total <= 0:
                 return None, None
-            pick = lo + rng.choice(hi - lo, p=w / w.sum())
-            word = int(self._nxt[pick])
-            if word == self.word_id[EOS]:
+            pick = lo + rng.choice(hi - lo, p=w / total)
+            word = int(chain.nxt[pick])
+            if word == stop:
                 return tokens, sources
             tokens.append(self.vocab[word])
-            sources.append(int(self._title_idx[pick]))
+            sources.append(int(chain.title_idx[pick]))
             s1, s2 = s2, word
         return None, None
 
-    def _fluency(self, tokens: list[str]) -> float:
-        """Rata-rata log-peluang orde-2 (dengan cadangan orde-1) di model global."""
+    def _sample_free(self, weights, boost, rng):
+        bos = self.word_id[BOS]
+        return self._walk(self.forward, (bos, bos), weights, boost, rng, self.word_id[EOS])
+
+    def _sample_anchored(self, word: str, weights, boost, rng):
+        """
+        Judul yang memuat `word`: ambil satu kemunculannya di judul katalog
+        (berbobot), jadikan pasangan dua kata di sekitarnya benih, lalu tarik
+        rantai maju sampai akhir dan mundur sampai awal. Setiap trigram tetap
+        pernah ada di katalog, termasuk di kedua sisi benih.
+        """
+        occ = self.occurrences[word]
+        p = np.array([weights[t] for t, _ in occ])
+        t, pos = occ[rng.choice(len(occ), p=p / p.sum())]
+        toks = self.title_tokens[t]
+        if pos + 1 < len(toks) and (pos == 0 or rng.random() < 0.5):
+            a, b = toks[pos], toks[pos + 1]
+        else:
+            a, b = toks[pos - 1], toks[pos]
+        ia, ib = self.word_id[a], self.word_id[b]
+        after, src_a = self._walk(self.forward, (ia, ib), weights, boost, rng, self.word_id[EOS])
+        if after is None:
+            return None, None
+        before, src_b = self._walk(self.backward, (ib, ia), weights, boost, rng, self.word_id[BOS])
+        if before is None:
+            return None, None
+        return before[::-1] + [a, b] + after, src_b[::-1] + [t, t] + src_a
+
+    def _fluency(self, tokens: list[str]) -> tuple[float, float]:
+        """
+        Log-peluang orde-2 (cadangan orde-1) di model global: rata-rata dan
+        sambungan terlemah. Rata-rata menyamarkan satu sambungan rusak di judul
+        panjang; nilai minimum menangkapnya.
+        """
         ids = [self.word_id[BOS]] * 2 + [self.word_id[t] for t in tokens] + [self.word_id[EOS]]
-        total = 0.0
+        logs = []
         for i in range(2, len(ids)):
             tri = self._trigram_global[(ids[i - 2], ids[i - 1], ids[i])]
             st = self._state_count[(ids[i - 2], ids[i - 1])]
             bi = self._bigram_global[(ids[i - 1], ids[i])]
             fr = self._from_count[ids[i - 1]]
             p = 0.7 * (tri / st if st else 0) + 0.3 * ((bi + 0.1) / (fr + 0.1 * self._v))
-            total += np.log(p)
-        return total / (len(ids) - 2)
+            logs.append(np.log(p))
+        return float(np.mean(logs)), float(np.min(logs))
+
+    def _splices(self, tokens: list[str], sources: list[int]) -> tuple[int, float]:
+        """Jumlah titik ganti judul asal, dan porsi yang 4-gram-nya pernah ada di katalog."""
+        seq = [BOS] + tokens + [EOS]
+        points = [i for i in range(1, len(sources)) if sources[i] != sources[i - 1]]
+        if not points:
+            return 0, 1.0
+        # tokens[i] ada di seq[i + 1]; 4-gram dua kata sebelum dan satu sesudah titik ganti.
+        attested = [tuple(seq[i - 1:i + 3]) in self.fourgrams for i in points if i >= 1]
+        return len(points), float(np.mean(attested)) if attested else 1.0
 
     def _is_copy(self, tokens: list[str], sources: list[int]) -> bool:
         # Semua kata dari satu judul = potongan judul itu, bukan judul baru.
@@ -229,92 +305,144 @@ class TitleGenerator:
         text = " ".join(words)
         return re.sub(r" ([,:!?])", r"\1", text)
 
+    def anchor_words(self, keywords: set[str], weights: np.ndarray) -> dict[str, float]:
+        """
+        Kata cerita yang layak jadi tambatan, dengan bobotnya. Kata yang
+        dipakai di judul novel mirip ("sect", "villainess") naik; kata prosa
+        yang kebetulan pernah muncul di satu-dua judul ("decides") tenggelam.
+        """
+        base = float(np.mean(weights)) or 1.0
+        out: dict[str, float] = {}
+        for raw in sorted(keywords):  # urutan tetap: seed yang sama = judul yang sama
+            for word in (raw, raw[:-1] if raw.endswith("s") else raw + "s"):
+                occ = self.occurrences.get(word)
+                if occ:
+                    mean_w = float(np.mean([weights[t] for t, _ in occ]))
+                    out[word] = max(out.get(word, 0.0), np.log1p(len(occ)) * mean_w / base)
+                    break
+        return out
+
     def generate(
         self,
         weights: np.ndarray,
         keywords: set[str],
         n: int = 8,
-        attempts: int = 600,
-        min_words: int = 2,
-        max_words: int = 12,
         seed: int = 0,
         exclude: set[str] | None = None,
+        story: str = "",
     ) -> list[TitleIdea]:
         """
-        Sampling `attempts` kandidat, buang salinan, pilih `n` yang paling
-        relevan dan lancar dengan isi yang tidak saling tumpang tindih.
+        Pilih `n` judul yang beragam. Sumber utama: kerangka katalog yang diisi
+        kata cerita (`title_templates`), karena tata bahasanya utuh dari judul
+        nyata. Model Markov menambal bila kerangka yang cocok kurang dari `n`.
         `exclude` berisi judul (huruf kecil) yang sudah pernah ditampilkan.
         """
         exclude = exclude or set()
         rng = np.random.default_rng(seed)
-        edge_weight = weights[self._title_idx]
-        starts = self._starts
+
+        related = [
+            w for i in np.argsort(-weights)[:40] for w in self.title_tokens[int(i)]
+            if w not in FUNCTION_WORDS and w not in PUNCT
+        ]
+        fillers = self.frames.story_fillers(story or " ".join(sorted(keywords)), FUNCTION_WORDS,
+                                            [w for w, _ in Counter(related).most_common(40)])
+        framed = sorted(self.frames.generate(weights, fillers, rng),
+                        key=lambda r: r["score"] + rng.normal(0, 0.25), reverse=True)
+
+        chosen: list[dict] = []
+        used_frames: set[tuple] = set()
+
+        def offer(tokens: list[str], frame: tuple | None = None) -> bool:
+            joined = " ".join(tokens)
+            title = self.render(tokens)
+            if joined in self.title_set or joined in self.prefixes or title.lower() in exclude:
+                return False
+            if frame is not None and frame in used_frames:
+                return False
+            content = _content(tokens)
+            if any(len(content & c["content"]) / max(1, len(content | c["content"])) >= 0.5 for c in chosen):
+                return False
+            chosen.append({"title": title, "content": content})
+            if frame is not None:
+                used_frames.add(frame)
+            return len(chosen) == n
+
+        for row in framed:
+            if offer(row["tokens"], row["template"]):
+                break
+        if len(chosen) < n:
+            for tokens in self._markov_candidates(weights, keywords, rng):
+                if offer(tokens):
+                    break
+        return [TitleIdea(title=c["title"], relevance=1.0 - i / max(1, len(chosen)))
+                for i, c in enumerate(chosen)]
+
+    def _markov_candidates(self, weights: np.ndarray, keywords: set[str], rng, attempts: int = 900):
+        """Kandidat Markov terurut dari skor tertinggi (lihat docstring modul)."""
+        anchors = self.anchor_words(keywords, weights)
+        anchor_list = list(anchors)
+        anchor_p = np.array([anchors[w] for w in anchor_list], dtype=float)
+        if anchor_list:
+            anchor_p /= anchor_p.sum()
+        story_words = set(anchors) | keywords
         boost = np.ones(self._v)
-        for word in keywords & self.title_vocab:
+        for word in story_words & self.title_vocab:
             boost[self.word_id[word]] = 4.0
 
         seen, pool = set(), []
-        for _ in range(attempts):
-            tokens, sources = self._sample(edge_weight, starts, boost, rng)
-            if not tokens or not (min_words <= len([t for t in tokens if t not in PUNCT]) <= max_words):
+        for attempt in range(attempts):
+            if anchor_list and attempt % 2 == 0:
+                word = anchor_list[rng.choice(len(anchor_list), p=anchor_p)]
+                tokens, sources = self._sample_anchored(word, weights, boost, rng)
+            else:
+                tokens, sources = self._sample_free(weights, boost, rng)
+            if not tokens or len([t for t in tokens if t not in PUNCT]) < 2:
                 continue
-            last = tokens[-1]
+            first, last = tokens[0], tokens[-1]
             # Judul yang berakhir di kata sambung/kepemilikan ("... with", "... My")
             # atau memuat huruf tunggal sisa singkatan ("Top O") terbaca terpotong.
-            if last in PUNCT - {"!", "?"} or last in DANGLING:
+            if first in PUNCT or last in PUNCT - {"!", "?"} or last in DANGLING:
                 continue
             if any(len(t) == 1 and t.isalpha() and t not in {"a", "i"} for t in tokens):
                 continue
+            words = [t for t in tokens if t not in FUNCTION_WORDS and t not in PUNCT]
+            if len(words) != len(set(words)):  # "Sect ... Sect": dua judul tersambung di kata yang sama
+                continue
             key = " ".join(tokens)
-            if key in seen or self.render(tokens).lower() in exclude or self._is_copy(tokens, sources):
+            if key in seen or self._is_copy(tokens, sources):
                 continue
             seen.add(key)
             content = _content(tokens)
-            # Relevansi: kata isi judul yang muncul di cerita pengguna atau di
-            # judul novel termirip, ditimbang bobot judul asalnya.
-            hits = len(content & keywords)
-            support = float(np.mean([weights[s] for s in sources])) if sources else 0.0
+            mean_log, min_log = self._fluency(tokens)
+            splices, attested = self._splices(tokens, sources)
             pool.append({
-                "tokens": tokens, "content": content, "sources": sources,
-                "hits": hits, "support": support, "fluency": self._fluency(tokens),
+                "tokens": tokens, "content": content,
+                # Kata isi yang berasal dari cerita pengguna, ditimbang tambatannya.
+                "hits": sum(1.0 + min(anchors.get(w, 0.0), 2.0) for w in content & story_words),
+                "support": float(np.mean([weights[s] for s in sources])),
+                "fluency": mean_log, "weakest": min_log,
+                "splices": splices, "attested": attested,
             })
         if not pool:
             return []
 
         frame = pd.DataFrame(pool)
+        # Sambungan yang terlalu jarang di katalog = judul rusak, bukan kreatif.
+        floor = frame["weakest"].quantile(0.25)
+        frame = frame[frame["weakest"] >= floor].copy()
         z = lambda s: (s - s.mean()) / (s.std() or 1.0)  # noqa: E731
         frame["score"] = (
-            1.0 * frame["hits"].clip(upper=3)
-            + 0.8 * z(np.log(frame["support"]))
-            + 0.6 * z(frame["fluency"])
+            1.5 * z(frame["hits"].clip(upper=6))
+            + 0.7 * z(np.log(frame["support"]))
+            + 0.5 * z(frame["fluency"])
+            + 0.6 * z(frame["weakest"])
+            + 0.6 * z(frame["attested"])
+            # Tiap judul asal tambahan menambah peluang kalimat patah.
+            - 0.3 * z(frame["splices"].clip(upper=5))
             # Sedikit acak supaya batch berikutnya tidak dibuka judul yang sama.
-            + rng.normal(0, 0.35, len(frame))
+            + rng.normal(0, 0.3, len(frame))
         )
-        frame = frame.sort_values("score", ascending=False)
-
-        chosen: list[dict] = []
-        for row in frame.to_dict("records"):
-            if any(
-                len(row["content"] & c["content"]) / max(1, len(row["content"] | c["content"])) > 0.4
-                for c in chosen
-            ):
-                continue
-            chosen.append(row)
-            if len(chosen) == n:
-                break
-
-        top = frame["score"].max()
-        ideas = []
-        for row in chosen:
-            # Judul asal yang paling banyak menyumbang kata, maksimal tiga.
-            counts = Counter(row["sources"])
-            ranked = sorted(counts, key=lambda i: (-counts[i], -weights[i]))
-            ideas.append(TitleIdea(
-                title=self.render(row["tokens"]),
-                relevance=float(row["score"] / top) if top > 0 else 0.0,
-                sources=[str(self.catalog.at[i, "title"]) for i in ranked[:3]],
-            ))
-        return ideas
+        return frame.sort_values("score", ascending=False)["tokens"].tolist()
 
 
 def description_keywords(text: str) -> set[str]:

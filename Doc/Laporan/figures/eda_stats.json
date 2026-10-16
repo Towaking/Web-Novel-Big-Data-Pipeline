@@ -1,0 +1,441 @@
+{
+ "n": 39668,
+ "n_full": 39652,
+ "missing": {
+  "rating_votes": 0.0,
+  "days_per_chapter": 0.0,
+  "reading_list_count": 0.01,
+  "language": 0.08,
+  "type": 1.42,
+  "type_origin": 1.45,
+  "rating_score": 5.36,
+  "weighted_rating": 5.36,
+  "original_publisher": 14.43,
+  "chapter_count": 14.45,
+  "year": 16.48
+ },
+ "desc": {
+  "chapter_count": {
+   "count": 33924.0,
+   "mean": 291.481,
+   "std": 563.333,
+   "min": 1.0,
+   "25%": 68.0,
+   "50%": 135.0,
+   "75%": 279.0,
+   "max": 14276.0,
+   "skew": 7.529
+  },
+  "rating_score": {
+   "count": 37526.0,
+   "mean": 3.491,
+   "std": 0.821,
+   "min": 1.0,
+   "25%": 3.1,
+   "50%": 3.6,
+   "75%": 4.0,
+   "max": 5.0,
+   "skew": -0.951
+  },
+  "weighted_rating": {
+   "count": 37526.0,
+   "mean": 3.636,
+   "std": 0.351,
+   "min": 1.809,
+   "25%": 3.411,
+   "50%": 3.62,
+   "75%": 3.849,
+   "max": 4.876,
+   "skew": -0.009
+  },
+  "rating_votes": {
+   "count": 39652.0,
+   "mean": 56.902,
+   "std": 141.398,
+   "min": 0.0,
+   "25%": 4.0,
+   "50%": 15.0,
+   "75%": 56.0,
+   "max": 4225.0,
+   "skew": 9.459
+  },
+  "reading_list_count": {
+   "count": 39648.0,
+   "mean": 974.964,
+   "std": 2045.73,
+   "min": 1.0,
+   "25%": 60.0,
+   "50%": 200.0,
+   "75%": 946.0,
+   "max": 44569.0,
+   "skew": 4.879
+  },
+  "days_per_chapter": {
+   "count": 39651.0,
+   "mean": 218.249,
+   "std": 767.994,
+   "min": 0.1,
+   "25%": 6.6,
+   "50%": 25.6,
+   "75%": 101.3,
+   "max": 20610.0,
+   "skew": 8.255
+  },
+  "year": {
+   "count": 33118.0,
+   "mean": 2021.093,
+   "std": 5.106,
+   "min": 1740.0,
+   "25%": 2019.0,
+   "50%": 2022.0,
+   "75%": 2024.0,
+   "max": 2026.0,
+   "skew": -8.281
+  }
+ },
+ "iqr_upper": 595.5,
+ "n_outlier_ch": 3822,
+ "pct_outlier_ch": 11.27,
+ "max_ch": 14276.0,
+ "n_rel": 23238,
+ "raw_mean_all": 3.491,
+ "raw_std_all": 0.821,
+ "wr_mean": 3.636,
+ "wr_std": 0.351,
+ "raw_5_lowvote": 1587,
+ "raw_5_rel": 2,
+ "corr": {
+  "weighted_rating": {
+   "weighted_rating": 1.0,
+   "rating_votes": 0.429,
+   "reading_list_count": 0.443,
+   "chapter_count": -0.131,
+   "days_per_chapter": 0.047,
+   "year": -0.18
+  },
+  "rating_votes": {
+   "weighted_rating": 0.429,
+   "rating_votes": 1.0,
+   "reading_list_count": 0.911,
+   "chapter_count": 0.018,
+   "days_per_chapter": 0.183,
+   "year": -0.407
+  },
+  "reading_list_count": {
+   "weighted_rating": 0.443,
+   "rating_votes": 0.911,
+   "reading_list_count": 1.0,
+   "chapter_count": -0.031,
+   "days_per_chapter": 0.261,
+   "year": -0.518
+  },
+  "chapter_count": {
+   "weighted_rating": -0.131,
+   "rating_votes": 0.018,
+   "reading_list_count": -0.031,
+   "chapter_count": 1.0,
+   "days_per_chapter": -0.133,
+   "year": 0.076
+  },
+  "days_per_chapter": {
+   "weighted_rating": 0.047,
+   "rating_votes": 0.183,
+   "reading_list_count": 0.261,
+   "chapter_count": -0.133,
+   "days_per_chapter": 1.0,
+   "year": -0.504
+  },
+  "year": {
+   "weighted_rating": -0.18,
+   "rating_votes": -0.407,
+   "reading_list_count": -0.518,
+   "chapter_count": 0.076,
+   "days_per_chapter": -0.504,
+   "year": 1.0
+  }
+ },
+ "origin": {
+  "CN": 23690,
+  "KR": 8547,
+  "JP": 6751,
+  "NaN": 575,
+  "FIL": 29,
+  "ID": 23
+ },
+ "type": {
+  "Web Novel": 36829,
+  "Light Novel": 1574,
+  "Published Novel": 686,
+  "NaN": 563
+ },
+ "origin_wr": {
+  "CN": {
+   "mean": 3.733,
+   "count": 12445
+  },
+  "FIL": {
+   "mean": 3.441,
+   "count": 27
+  },
+  "JP": {
+   "mean": 3.599,
+   "count": 5130
+  },
+  "KR": {
+   "mean": 3.641,
+   "count": 5541
+  }
+ },
+ "completed_wr": {
+  "0": 3.594,
+  "1": 3.738
+ },
+ "licensed_wr": {
+  "0.0": 3.671,
+  "1.0": 3.733
+ },
+ "len_rating": {
+  "<50": {
+   "mean": 3.733,
+   "count": 3911
+  },
+  "50-199": {
+   "mean": 3.735,
+   "count": 9448
+  },
+  "200-499": {
+   "mean": 3.659,
+   "count": 4591
+  },
+  "500-999": {
+   "mean": 3.584,
+   "count": 1896
+  },
+  "1000+": {
+   "mean": 3.559,
+   "count": 1437
+  }
+ },
+ "pace_rating": {
+  "Harian": {
+   "mean": 3.639,
+   "count": 2312
+  },
+  "Mingguan": {
+   "mean": 3.674,
+   "count": 2805
+  },
+  "Bulanan": {
+   "mean": 3.651,
+   "count": 5013
+  },
+  "Lambat": {
+   "mean": 3.714,
+   "count": 8475
+  },
+  "Terhenti": {
+   "mean": 3.674,
+   "count": 4633
+  }
+ },
+ "genre_top": {
+  "Romance": 25083,
+  "Fantasy": 23119,
+  "Drama": 15877,
+  "Comedy": 13224,
+  "Action": 13002,
+  "Adventure": 11343,
+  "Slice of Life": 8647,
+  "Supernatural": 6738,
+  "Harem": 6331,
+  "Yaoi": 5483,
+  "Mature": 5233,
+  "Adult": 5171,
+  "Yuri": 5076,
+  "School Life": 4927,
+  "Shounen": 4524
+ },
+ "genre_best": {
+  "Shounen Ai": {
+   "mean": 3.904,
+   "count": 1333
+  },
+  "Yaoi": {
+   "mean": 3.879,
+   "count": 3875
+  },
+  "Historical": {
+   "mean": 3.814,
+   "count": 1503
+  },
+  "Mystery": {
+   "mean": 3.808,
+   "count": 2223
+  },
+  "Horror": {
+   "mean": 3.784,
+   "count": 1255
+  }
+ },
+ "genre_worst": {
+  "Ecchi": {
+   "mean": 3.438,
+   "count": 1788
+  },
+  "Harem": {
+   "mean": 3.503,
+   "count": 4738
+  },
+  "Adult": {
+   "mean": 3.554,
+   "count": 3486
+  },
+  "Xuanhuan": {
+   "mean": 3.564,
+   "count": 1494
+  },
+  "Shounen": {
+   "mean": 3.583,
+   "count": 2625
+  }
+ },
+ "n_genres_mean": 5.19,
+ "n_tags_median": 11.0,
+ "n_tags_mean": 15.41,
+ "tag_top": {
+  "Male Protagonist": 14088,
+  "Female Protagonist": 13770,
+  "Transmigration": 10667,
+  "Handsome Male Lead": 10140,
+  "Beautiful Female Lead": 10127,
+  "Modern Day": 9875,
+  "Love Interest Falls in Love First": 6232,
+  "Fantasy World": 4774,
+  "Misunderstandings": 4716,
+  "Calm Protagonist": 4669
+ },
+ "n_tags_distinct": 772,
+ "multi_author": 14679,
+ "syn_n": 39342,
+ "syn_median": 133.0,
+ "syn_mean": 161.3,
+ "syn_p90": 314.0,
+ "syn_lt50": 11.9,
+ "vocab_size": 62416,
+ "top_words": {
+  "one": 25836,
+  "world": 25462,
+  "life": 20946,
+  "even": 14859,
+  "like": 14535,
+  "day": 13676,
+  "time": 12154,
+  "love": 11820,
+  "family": 11381,
+  "years": 11260,
+  "man": 11168,
+  "first": 9319,
+  "eyes": 9164,
+  "back": 8567,
+  "little": 8533
+ },
+ "n_stop": 191,
+ "year_trend": {
+  "2010.0": {
+   "n": 182,
+   "wr": 3.745,
+   "ch": 63.0,
+   "done": 0.505
+  },
+  "2011.0": {
+   "n": 275,
+   "wr": 3.785,
+   "ch": 79.0,
+   "done": 0.567
+  },
+  "2012.0": {
+   "n": 341,
+   "wr": 3.782,
+   "ch": 80.0,
+   "done": 0.584
+  },
+  "2013.0": {
+   "n": 414,
+   "wr": 3.757,
+   "ch": 114.0,
+   "done": 0.541
+  },
+  "2014.0": {
+   "n": 583,
+   "wr": 3.761,
+   "ch": 125.0,
+   "done": 0.6
+  },
+  "2015.0": {
+   "n": 844,
+   "wr": 3.749,
+   "ch": 138.0,
+   "done": 0.579
+  },
+  "2016.0": {
+   "n": 1042,
+   "wr": 3.713,
+   "ch": 174.5,
+   "done": 0.601
+  },
+  "2017.0": {
+   "n": 1216,
+   "wr": 3.719,
+   "ch": 147.0,
+   "done": 0.639
+  },
+  "2018.0": {
+   "n": 1425,
+   "wr": 3.738,
+   "ch": 136.0,
+   "done": 0.675
+  },
+  "2019.0": {
+   "n": 2000,
+   "wr": 3.736,
+   "ch": 131.0,
+   "done": 0.69
+  },
+  "2020.0": {
+   "n": 2487,
+   "wr": 3.711,
+   "ch": 132.0,
+   "done": 0.705
+  },
+  "2021.0": {
+   "n": 2734,
+   "wr": 3.671,
+   "ch": 144.0,
+   "done": 0.702
+  },
+  "2022.0": {
+   "n": 3041,
+   "wr": 3.635,
+   "ch": 150.0,
+   "done": 0.686
+  },
+  "2023.0": {
+   "n": 3328,
+   "wr": 3.623,
+   "ch": 160.0,
+   "done": 0.637
+  },
+  "2024.0": {
+   "n": 4339,
+   "wr": 3.59,
+   "ch": 167.0,
+   "done": 0.564
+  },
+  "2025.0": {
+   "n": 5626,
+   "wr": 3.57,
+   "ch": 138.0,
+   "done": 0.418
+  }
+ }
+}

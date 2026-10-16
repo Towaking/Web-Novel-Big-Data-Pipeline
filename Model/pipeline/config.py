@@ -7,11 +7,16 @@ eksperimen cukup mengubah satu tempat dan hasilnya dapat direproduksi.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 ARTIFACT_DIR = Path("/opt/project/Model/artifacts")
 RANDOM_STATE = 42
+
+#: Worker latih paralel (per genre / per pohon). Container melihat semua core host;
+#: OMP_NUM_THREADS=2 membatasi thread BLAS, bukan proses joblib ini.
+N_JOBS = int(os.environ.get("PHASE4_N_JOBS", "2"))
 
 #: Genre dengan contoh lebih sedikit dari ini dibuang: klasifikator yang hanya
 #: melihat <50 contoh positif selalu memprediksi "bukan" dan mengaburkan macro-F1.
@@ -33,20 +38,24 @@ class FeatureConfig:
     menyumbang (tag saja 0,507 · sinopsis saja 0,455 · gabungan 0,547 makro-F1).
     """
 
+    # Setelah C dan bobot blok dituning, kosakata 40k / 75k / 150k per blok memberi makro-F1
+    # OOF 0,6020 / 0,6022 / 0,6027; 75k dipilih (mikro-F1 0,6712 vs 0,6688) di separuh ukuran 150k.
     corpus_min_df: int = 3
-    corpus_max_features: int = 40_000
+    corpus_max_features: int = 75_000
     synopsis_min_df: int = 3
-    synopsis_max_features: int = 40_000
+    synopsis_max_features: int = 75_000
     tags_min_df: int = 2
-    tags_max_features: int = 10_000
+    tags_max_features: int = 15_000
     ngram_range: tuple = (1, 2)
     max_df: float = 0.85
     weights: dict = field(
         default_factory=lambda: {
-            "corpus": 1.0,
-            "synopsis": 1.0,
-            "tags": 1.6,   # tag = label kurasi manusia, presisi tertinggi
-            "meta": 0.6,
+            # Hasil TPE 40 trial bersama C SVM (OOF 0,6027). Sinopsis sudah termuat di
+            # korpus, jadi blok sinopsis sendiri cukup berbobot rendah.
+            "corpus": 2.31,
+            "synopsis": 0.95,
+            "tags": 1.48,
+            "meta": 0.48,
             # Bobot blok embedding pralatih. Dipilih lewat sapuan OOF
             # (0,5 / 1 / 2 / 3 / 5); lihat model card bagian Head A.
             "embedding": 1.0,

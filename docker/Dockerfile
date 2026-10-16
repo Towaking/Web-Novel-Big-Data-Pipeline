@@ -102,6 +102,13 @@ RUN mkdir -p ${HF_HOME} \
     && echo 1 > ${HF_HOME}/hub/version.txt \
     && chmod -R a+rwX ${HF_HOME}
 
+# POS tagger NLTK untuk ide judul AI Studio (src/common/title_templates.py):
+# membedakan kata benda/sifat/kerja di cerita pengguna dan di judul katalog.
+# Tanpa data ini generator tetap jalan, hanya tanpa pemeriksaan jenis kata.
+ENV NLTK_DATA=/opt/nltk_data
+RUN python -c "import nltk, sys; sys.exit(0 if nltk.download('averaged_perceptron_tagger_eng', download_dir='/opt/nltk_data', quiet=True) else 1)" \
+    && chmod -R a+rX /opt/nltk_data
+
 # Seluruh bobot sudah berada di dalam image, jadi jalur inferensi tidak perlu
 # lagi menghubungi Hugging Face — itulah alasan Layer 6 ada. Tanpa flag ini
 # huggingface_hub tetap melakukan panggilan revalidasi tiap kali encoder dimuat:

@@ -84,6 +84,22 @@ def tune_thresholds(
     return thresholds
 
 
+def blend_probabilities(parts, space: str = "logit") -> np.ndarray:
+    """
+    Gabungkan probabilitas beberapa model berbobot; dipakai saat latih dan inferensi ensemble.
+
+    "logit" merata-ratakan log-odds (logarithmic pooling, Genest dkk. 1984). Rata-rata probabilitas
+    biasa ("prob") membiarkan probabilitas Random Forest yang landai mengacak urutan tiga genre teratas.
+    """
+    if space == "prob":
+        return sum(weight * prob for weight, prob in parts)
+    log_odds = 0.0
+    for weight, prob in parts:
+        clipped = np.clip(prob, 1e-4, 1 - 1e-4)
+        log_odds = log_odds + weight * np.log(clipped / (1 - clipped))
+    return 1.0 / (1.0 + np.exp(-log_odds))
+
+
 def per_label_scores(
     y_true: np.ndarray, y_prob: np.ndarray, thresholds: np.ndarray, labels: list[str]
 ) -> dict:

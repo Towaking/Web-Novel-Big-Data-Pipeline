@@ -1,0 +1,84 @@
+{
+  "quality_report": [
+    {
+      "step": "1_raw_loaded",
+      "rows": 39670,
+      "note": "novel_catalogue.csv dari raw-data"
+    },
+    {
+      "step": "2_identified",
+      "rows": 39670,
+      "note": "url & title ada"
+    },
+    {
+      "step": "3_sentinels_to_null",
+      "rows": 39670,
+      "note": "null: chapter_count=5738, year=6368, rating_score=2132, tags=761"
+    },
+    {
+      "step": "4_deduplicated",
+      "rows": 39668,
+      "note": "kunci: series_id"
+    },
+    {
+      "step": "5_with_synopsis",
+      "rows": 39027,
+      "note": "cakupan 98.38% (minimal 10 kata)"
+    },
+    {
+      "step": "6_enriched",
+      "rows": 39668,
+      "note": "C_global=3.6519"
+    },
+    {
+      "step": "7_with_text_signal",
+      "rows": 39660,
+      "note": "token_count >= 3"
+    },
+    {
+      "step": "8_reliable_rating",
+      "rows": 23256,
+      "note": ">= 10 suara"
+    }
+  ],
+  "row_counts": {
+    "fact_novel": 39668,
+    "dim_novel": 39668,
+    "dim_time": 74,
+    "dim_publisher": 3122,
+    "dim_genre": 35,
+    "dim_tag": 772,
+    "dim_author": 27324,
+    "bridge_novel_genre": 205852,
+    "bridge_novel_tag": 611934,
+    "bridge_novel_author": 41115,
+    "graph_nodes": 67799,
+    "graph_edges": 858901
+  },
+  "projections": {
+    "genre_cooccurrence": {
+      "n_nodes": "35",
+      "n_edges": "579",
+      "n_components": "1",
+      "largest_component_size": "35",
+      "n_isolated_nodes": 0.0,
+      "n_communities": "3",
+      "modularity": 0.0858,
+      "traversal_hops": 2.0,
+      "traversal_path": "Yaoi -> School Life -> Yuri",
+      "n_authors_without_collaborator": null
+    },
+    "author_collaboration": {
+      "n_nodes": "2574",
+      "n_edges": "2693",
+      "n_components": "930",
+      "largest_component_size": "22",
+      "n_isolated_nodes": null,
+      "n_communities": "930",
+      "modularity": 0.9947,
+      "traversal_hops": null,
+      "traversal_path": null,
+      "n_authors_without_collaborator": 24750.0
+    }
+  }
+}

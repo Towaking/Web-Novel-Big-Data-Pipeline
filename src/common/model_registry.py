@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 
 from src.common.logging_utils import get_logger
-from src.common.text_prep import build_query_text, to_corpus, tokenize
+from src.common.text_prep import build_query_text, tags_text, to_corpus, tokenize
 
 logger = get_logger("model_registry")
 
@@ -138,9 +138,9 @@ class ModelRegistry:
                     "synopsis_clean": to_corpus(text, self.stopwords),
                     # Tag kosong = blok tag kosong, persis novel tanpa tag saat
                     # training. Mengisinya dengan sinopsis membuat kata prosa
-                    # mengaktifkan blok berbobot tertinggi (1,6) yang tak pernah
+                    # mengaktifkan blok berbobot tertinggi yang tak pernah
                     # melihat prosa saat dilatih.
-                    "tags_clean": (tags or "").lower().replace(",", " "),
+                    "tags_clean": tags_text(tags),
                     "type_origin": type_origin,
                     "type": novel_type,
                     # Kalimat utuh untuk arsitektur hybrid: encoder pralatih
@@ -153,10 +153,15 @@ class ModelRegistry:
         )
 
         bundle = self.genre_models[name]
-        probabilities = np.asarray(bundle["pipeline"].predict_proba(frame))
-        if probabilities.ndim == 3:  # sebagian estimator: (n_labels, n_samples, 2)
-            probabilities = probabilities[:, :, 1].T
-        probabilities = probabilities.ravel()
+        if "members" in bundle:
+            from Model.pipeline.evaluate import blend_probabilities
+
+            # Ensemble hanya menyimpan bobot; probabilitasnya dirakit dari model anggota.
+            parts = [(weight, self._genre_probabilities(member, frame))
+                     for member, weight in bundle["members"].items()]
+            probabilities = blend_probabilities(parts, bundle.get("space", "prob"))
+        else:
+            probabilities = self._genre_probabilities(name, frame)
 
         thresholds = np.asarray(bundle["thresholds"], dtype=float) * float(sensitivity)
         labels = bundle.get("labels", list(self.genre_binarizer.classes_))
@@ -181,6 +186,16 @@ class ModelRegistry:
             .head(top_k)
             .reset_index(drop=True)
         )
+
+    def _genre_probabilities(self, name: str, frame: pd.DataFrame) -> np.ndarray:
+        """Probabilitas per genre dari satu pipeline, diratakan ke bentuk (n_labels,)."""
+        probabilities = self.genre_models[name]["pipeline"].predict_proba(frame)
+        if isinstance(probabilities, list):  # Random Forest multi-output: satu (n, 2) per genre
+            probabilities = np.column_stack([p[:, 1] for p in probabilities])
+        probabilities = np.asarray(probabilities)
+        if probabilities.ndim == 3:  # sebagian estimator: (n_labels, n_samples, 2)
+            probabilities = probabilities[:, :, 1].T
+        return probabilities.ravel()
 
     # HEAD B
     def recommend_by_vector(self, vector: np.ndarray, k: int = 10, exclude_idx: int | None = None) -> pd.DataFrame:
@@ -276,8 +291,16 @@ class ModelRegistry:
         }
         numeric = np.array([values.get(name, 0.0) for name in feature_names], dtype=np.float32)
 
-        features = np.hstack([self.embed(text), numeric]).reshape(1, -1)
-        prediction = float(self.rating_regressor.predict(features)[0])
+        if hasattr(self.rating_regressor, "design_matrix"):
+            # RatingModel dilatih dari judul + sinopsis + tag, jadi tag ikut di-embed.
+            combined = f"{text} {tags}".strip()
+            ridge_text = f"{to_corpus(combined, self.stopwords)} {tags_text(tags)}"
+            prediction = float(self.rating_regressor.predict(
+                self.embed(combined).reshape(1, -1), numeric.reshape(1, -1), [ridge_text], [tags],
+            )[0])
+        else:
+            features = np.hstack([self.embed(text), numeric]).reshape(1, -1)
+            prediction = float(self.rating_regressor.predict(features)[0])
         return float(np.clip(prediction, 1.0, 5.0))
 
 
@@ -293,7 +316,7 @@ def load_registry(artifact_dir: Path = ARTIFACT_DIR) -> ModelRegistry:
     Raises:
         ModelNotTrainedError: bila ada artefak wajib yang belum tersedia.
     """
-    import joblib
+    from src.common.artifact_io import load_artifact
 
     missing = [name for name in REQUIRED_FILES if not (artifact_dir / name).is_file()]
     if missing:
@@ -309,12 +332,12 @@ def load_registry(artifact_dir: Path = ARTIFACT_DIR) -> ModelRegistry:
     head_d_trained = metrics.get("head_d_rating_estimator", {}).get("trained", True)
 
     registry = ModelRegistry(
-        vectorizer=joblib.load(artifact_dir / "vectorizer.joblib"),
-        svd=joblib.load(artifact_dir / "svd.joblib"),
-        genre_models=joblib.load(artifact_dir / "genre_models.joblib"),
-        genre_binarizer=joblib.load(artifact_dir / "genre_binarizer.joblib"),
-        kmeans=joblib.load(artifact_dir / "kmeans.joblib"),
-        rating_regressor=joblib.load(regressor_path) if head_d_trained and regressor_path.is_file() else None,
+        vectorizer=load_artifact(artifact_dir / "vectorizer.joblib"),
+        svd=load_artifact(artifact_dir / "svd.joblib"),
+        genre_models=load_artifact(artifact_dir / "genre_models.joblib"),
+        genre_binarizer=load_artifact(artifact_dir / "genre_binarizer.joblib"),
+        kmeans=load_artifact(artifact_dir / "kmeans.joblib"),
+        rating_regressor=load_artifact(regressor_path) if head_d_trained and regressor_path.is_file() else None,
         catalog=pd.read_parquet(artifact_dir / "catalog.parquet"),
         embeddings=np.load(artifact_dir / "embeddings.npy"),
         metrics=metrics,
