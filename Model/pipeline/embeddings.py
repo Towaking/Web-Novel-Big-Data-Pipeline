@@ -54,13 +54,25 @@ DEFAULT_MAX_LEN = 384
 _CACHE: dict[tuple, np.ndarray] = {}
 _MODELS: dict[tuple, object] = {}
 
-#: Batas atas memo. Saat training isinya persis satu korpus (4.460 entri,
-#: ~6,8 MB) sehingga batas ini tidak pernah tersentuh. Yang dijaga adalah
-#: proses Streamlit yang hidup berminggu-minggu: tanpa batas, setiap teks baru
-#: dari pengguna menambah ~1,6 KB yang tidak pernah dilepas. Saat penuh,
-#: separuh entri terlama dibuang — memo ini hanya optimasi kecepatan, jadi
-#: kehilangan isinya tidak pernah mengubah hasil.
-_CACHE_MAX = 20_000
+#: Batas atas memo. Yang dijaga adalah proses Streamlit yang hidup
+#: berminggu-minggu: tanpa batas, setiap teks baru dari pengguna menambah
+#: ~1,6 KB yang tidak pernah dilepas. Saat penuh, separuh entri terlama
+#: dibuang — memo ini hanya optimasi kecepatan, jadi kehilangan isinya tidak
+#: pernah mengubah hasil.
+#:
+#: Saat training batas ini HARUS di atas ukuran korpus: dengan ~40 ribu
+#: dokumen, satu fold KFold sudah ~21 ribu teks, dan batas 20 ribu membuat
+#: memo dipangkas lalu diisi ulang di setiap fold (korpus di-encode ulang
+#: 6-7x, berjam-jam CPU). Fase 4 menaikkannya lewat `reserve()`.
+_CACHE_MAX = int(os.environ.get("EMBED_CACHE_MAX", "20000"))
+
+
+def reserve(n_texts: int) -> None:
+    """Pastikan memo muat `n_texts` entri (dipanggil training sebelum CV)."""
+    global _CACHE_MAX
+    if n_texts > _CACHE_MAX:
+        _CACHE_MAX = n_texts
+        logger.info("Batas memo embedding dinaikkan ke %d entri.", n_texts)
 
 
 def _evict_if_full() -> None:

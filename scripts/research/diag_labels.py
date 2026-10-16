@@ -15,7 +15,7 @@ for g, n in c.most_common():
     used = 'DIPAKAI' if g in set(mlb.classes_) else '  dibuang'
     print('   %-16s %5d  %s' % (g, n, used))
 
-# --- duplikat-dekat: judul yang sangat mirip (potensi kebocoran train/test) ---
+# duplikat-dekat: judul yang sangat mirip (potensi kebocoran train/test)
 print('\n--- cek duplikat-dekat judul ---')
 import re
 def norm(t):

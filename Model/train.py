@@ -12,10 +12,10 @@ menyimpang; yang ada di sini hanyalah lapisan antarmuka baris perintah.
 
 Contoh pemakaian
 ----------------
-    # Latih ulang semuanya (4 model genre + rekomendasi + klaster + rating)
+    # Latih ulang semuanya (3 model genre klasik + ensemble + rekomendasi + klaster + rating)
     docker compose exec pipeline python Model/train.py
 
-    # Hanya model genre, semua arsitektur
+    # Hanya model genre bawaan (logreg, svm, rf, ensemble)
     docker compose exec pipeline python Model/train.py --only genre
 
     # Hanya arsitektur tertentu (yang lain dipertahankan dari artefak lama)
@@ -30,8 +30,10 @@ Contoh pemakaian
 Daftar arsitektur yang tersedia:
     logreg   Logistic Regression (TF-IDF)
     svm      Linear SVM terkalibrasi (TF-IDF)
-    hybrid   TF-IDF + embedding kalimat pralatih (BGE) - terbaik
-    bilstm   BiLSTM + Attention (deep learning)
+    rf       Random Forest multi-output (TF-IDF terseleksi chi-kuadrat)
+    ensemble rata-rata berbobot svm + rf (butuh keduanya di run yang sama)
+    hybrid   TF-IDF + embedding kalimat pralatih (BGE), neural, hanya bila diminta
+    bilstm   BiLSTM + Attention (deep learning), hanya bila diminta
 """
 
 from __future__ import annotations
@@ -64,7 +66,7 @@ def train_genre_only(model_names: list[str] | None, epochs: int | None, upload: 
     """
     log_section(logger, "melatih ulang model genre")
 
-    requested = model_names or list(genre_models.MODEL_CATALOG)
+    requested = model_names or list(genre_models.DEFAULT_MODELS)
     unknown = [m for m in requested if m not in genre_models.MODEL_CATALOG]
     if unknown:
         raise SystemExit(
@@ -75,22 +77,40 @@ def train_genre_only(model_names: list[str] | None, epochs: int | None, upload: 
     if epochs is not None:
         # Berlaku hanya untuk model deep learning; model linear tidak punya epoch.
         for name in requested:
-            # `hybrid` ikut dikecualikan bersama model linear: blok embedding
-            # memakai encoder beku, jadi tidak ada epoch yang bisa disetel.
-            if name in genre_models.PARAM_GRID and name not in ("logreg", "svm", "hybrid"):
+            # Hanya arsitektur jaringan saraf yang punya epoch.
+            if name in genre_models.ARCHITECTURES:
                 for config in genre_models.PARAM_GRID[name]:
                     config["epochs"] = epochs
         logger.info("Epoch model deep learning dipaksa menjadi %d.", epochs)
 
     pdf, stopwords = phase4_model.load_training_frame()
+    frame = phase4_model.build_genre_frame(pdf, stopwords)
 
-    artifacts, mlb, metrics = phase4_model.train_genre_tagger(pdf, names=requested)
+    artifacts, mlb, metrics = phase4_model.train_genre_tagger(pdf, names=requested, frame=frame)
 
     # Gabungkan dengan artefak lama agar arsitektur lain tidak hilang.
     previous_path = ARTIFACT_DIR / "genre_models.joblib"
-    if previous_path.is_file() and set(requested) != set(genre_models.MODEL_CATALOG):
+    if previous_path.is_file() and set(requested) != set(genre_models.DEFAULT_MODELS):
+        # Model lama hanya boleh dipertahankan bila ruang labelnya SAMA dengan
+        # binarizer baru: zona clean bisa sudah berubah (genre bertambah) sejak
+        # model itu dilatih, dan predict_genres memasangkan probabilitas tiap
+        # model dengan genre_binarizer.classes_ yang baru disimpan.
+        old_binarizer = ARTIFACT_DIR / "genre_binarizer.joblib"
+        old_labels = list(joblib.load(old_binarizer).classes_) if old_binarizer.is_file() else None
+        if old_labels != list(mlb.classes_):
+            raise SystemExit(
+                f"Ruang label berubah ({len(old_labels or [])} -> {len(mlb.classes_)} genre) sejak "
+                "genre_models.joblib terakhir dilatih: model lama tidak bisa digabung. "
+                "Latih ulang model bawaan (tanpa --models)."
+            )
         previous = joblib.load(previous_path)
         merged = {**previous, **artifacts}
+        ensemble = merged.get("ensemble", {})
+        if "ensemble" not in artifacts and any(m in artifacts for m in ensemble.get("members", {})):
+            # Bobot & ambang ensemble disetel untuk anggota lama.
+            merged.pop("ensemble")
+            logger.info("Ensemble lama dibuang karena anggotanya dilatih ulang; sertakan 'ensemble' "
+                        "bersama anggotanya di --models untuk merakitnya lagi.")
         logger.info(
             "Artefak digabung: %s dilatih ulang, %s dipertahankan.",
             ", ".join(requested),
@@ -115,7 +135,11 @@ def train_genre_only(model_names: list[str] | None, epochs: int | None, upload: 
     if stale:
         logger.info("Metrik arsitektur usang dibuang: %s", ", ".join(stale))
 
-    head_a["best_model"] = max(head_a["models"], key=lambda k: head_a["models"][k]["f1_macro"])
+    # Pilihan dari skor OOF (set dev), bukan skor uji - sama seperti train_all.
+    head_a["best_model"] = max(
+        head_a["models"],
+        key=lambda k: head_a["models"][k].get("f1_macro_oof", head_a["models"][k]["f1_macro"]),
+    )
     all_metrics["head_a_genre_tagger"] = head_a
     all_metrics.setdefault("stopwords", stopwords)
 
@@ -167,7 +191,7 @@ def main() -> int:
         "--models",
         nargs="+",
         metavar="NAMA",
-        help="Arsitektur genre yang dilatih ulang (default: semua). "
+        help="Arsitektur genre yang dilatih ulang (default: logreg svm rf ensemble). "
         "Menyiratkan --only genre.",
     )
     parser.add_argument(

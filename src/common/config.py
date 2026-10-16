@@ -41,11 +41,25 @@ def _env_int(key: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class MinioConfig:
-    """Kredensial & endpoint object storage (S3-compatible)."""
+    """
+    Kredensial & endpoint object storage (S3-compatible).
 
-    endpoint: str = field(default_factory=lambda: _env("MINIO_ENDPOINT", "http://minio:9000"))
-    access_key: str = field(default_factory=lambda: _env("MINIO_ROOT_USER", "minioadmin"))
-    secret_key: str = field(default_factory=lambda: _env("MINIO_ROOT_PASSWORD", "minioadmin123"))
+    Kredensialnya berjenjang: `MINIO_ACCESS_KEY`/`MINIO_SECRET_KEY` menang bila
+    diset, kalau tidak jatuh ke kredensial root. Jenjang ini yang memungkinkan
+    *least privilege* per service tanpa mengubah kode fase mana pun — service
+    streamlit dijalankan dengan akun read-only lewat env var, sementara service
+    pipeline yang memang harus menulis tetap memakai akun read-write.
+    """
+
+    endpoint: str = field(default_factory=lambda: _env("MINIO_ENDPOINT", "https://minio:9000"))
+    access_key: str = field(
+        default_factory=lambda: _env("MINIO_ACCESS_KEY", _env("MINIO_ROOT_USER", "minioadmin"))
+    )
+    secret_key: str = field(
+        default_factory=lambda: _env(
+            "MINIO_SECRET_KEY", _env("MINIO_ROOT_PASSWORD", "minioadmin123")
+        )
+    )
     bucket_raw: str = field(default_factory=lambda: _env("BUCKET_RAW", "raw-data"))
     bucket_clean: str = field(default_factory=lambda: _env("BUCKET_CLEAN", "clean-data"))
     bucket_curated: str = field(default_factory=lambda: _env("BUCKET_CURATED", "curated-data"))
@@ -61,6 +75,18 @@ class MinioConfig:
 
 
 @dataclass(frozen=True)
+class HdfsConfig:
+    """
+    Endpoint HDFS (distributed file system). MinIO tetap menjadi data lake untuk
+    Fase 1-4; HDFS menyimpan dataset hasil pemisahan format yang diproses MapReduce.
+    """
+
+    namenode_uri: str = field(default_factory=lambda: _env("HDFS_NAMENODE_URI", "hdfs://namenode:8020"))
+    webhdfs_url: str = field(default_factory=lambda: _env("WEBHDFS_URL", "http://namenode:9870"))
+    root_dir: str = field(default_factory=lambda: _env("HDFS_ROOT_DIR", "/novel"))
+
+
+@dataclass(frozen=True)
 class SparkConfig:
     """Parameter cluster & tuning Spark."""
 
@@ -68,9 +94,13 @@ class SparkConfig:
     driver_host: str = field(default_factory=lambda: _env("SPARK_DRIVER_HOST", ""))
     driver_memory: str = field(default_factory=lambda: _env("SPARK_DRIVER_MEMORY", "2G"))
     executor_memory: str = field(default_factory=lambda: _env("SPARK_EXECUTOR_MEMORY", "2G"))
-    # Dataset ini kecil (~4.5k baris): 200 shuffle partition default Spark
+    # Dataset ini kecil (~40k baris): 200 shuffle partition default Spark
     # justru bikin overhead task jauh lebih mahal dari komputasinya.
     shuffle_partitions: int = field(default_factory=lambda: _env_int("SPARK_SHUFFLE_PARTITIONS", 8))
+    # Kosong = tanpa batas (aplikasi mengambil semua core). Diisi untuk driver
+    # sekunder (notebook) supaya tidak memonopoli worker dan membuat aplikasi
+    # pipeline menunggu resource tanpa batas.
+    cores_max: str = field(default_factory=lambda: _env("SPARK_CORES_MAX", ""))
 
 
 @dataclass(frozen=True)
@@ -81,13 +111,8 @@ class PathConfig:
 
     @property
     def source_csv(self) -> Path:
-        """Dataset utama: metadata, rating, jumlah bab, tag."""
-        return self.project_root / _env("SOURCE_CSV", "Dataset/data_novel.csv")
-
-    @property
-    def synopsis_csv(self) -> Path:
-        """Dataset pendamping: sinopsis hasil scraping, di-join lewat `url`."""
-        return self.project_root / _env("SOURCE_SYNOPSIS_CSV", "Dataset/novel_dataset_scrapped.csv")
+        """Katalog NovelUpdates satu berkas, keluaran scripts/scraper/consolidate_catalogue.py."""
+        return self.project_root / _env("SOURCE_CSV", "Dataset/novel_catalogue.csv")
 
     @property
     def model_dir(self) -> Path:
@@ -103,21 +128,16 @@ class Settings:
     """Root configuration object."""
 
     minio: MinioConfig = field(default_factory=MinioConfig)
+    hdfs: HdfsConfig = field(default_factory=HdfsConfig)
     spark: SparkConfig = field(default_factory=SparkConfig)
     paths: PathConfig = field(default_factory=PathConfig)
-    raw_object_key: str = field(default_factory=lambda: _env("RAW_OBJECT_KEY", "novel/data_novel.csv"))
-    raw_synopsis_key: str = field(
-        default_factory=lambda: _env("RAW_SYNOPSIS_OBJECT_KEY", "novel/novel_dataset_scrapped.csv")
-    )
+    raw_object_key: str = field(default_factory=lambda: _env("RAW_OBJECT_KEY", "novel/novel_catalogue.csv"))
     log_level: str = field(default_factory=lambda: _env("LOG_LEVEL", "INFO").upper())
 
     @property
     def raw_sources(self) -> tuple[tuple[Path, str], ...]:
         """Pasangan (file lokal, object key) yang diingest Fase 1."""
-        return (
-            (self.paths.source_csv, self.raw_object_key),
-            (self.paths.synopsis_csv, self.raw_synopsis_key),
-        )
+        return ((self.paths.source_csv, self.raw_object_key),)
 
 
 @lru_cache(maxsize=1)

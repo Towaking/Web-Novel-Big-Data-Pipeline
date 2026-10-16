@@ -1,0 +1,666 @@
+{
+  "generated_at_utc": "2026-10-15T08:42:13+00:00",
+  "k": 10,
+  "n_nodes": 39660,
+  "n_edges": 314786,
+  "mean_edge_weight": 0.5841,
+  "degree": {
+    "min": 10,
+    "median": 13.0,
+    "mean": 15.87,
+    "p99": 50.0,
+    "max": 198
+  },
+  "n_components": 1,
+  "largest_component_size": 39660,
+  "n_communities": 27,
+  "community_sizes_top10": [
+    4684,
+    3367,
+    3190,
+    3031,
+    2564,
+    2399,
+    2204,
+    1941,
+    1671,
+    1632
+  ],
+  "n_communities_ge_100": 26,
+  "modularity": 0.7192,
+  "agreement": {
+    "nmi_vs_kmeans": 0.3414,
+    "ari_vs_kmeans": 0.1955,
+    "nmi_vs_primary_genre": 0.1145,
+    "nmi_kmeans_vs_primary_genre": 0.1095
+  },
+  "pagerank_vs_votes_spearman": 0.0308,
+  "top_pagerank": [
+    {
+      "title": "My Partner Is Not Human [Quick Transmigration]",
+      "primary_genre": "Romance",
+      "degree": 198,
+      "pagerank": 0.000267,
+      "rating_votes": 0.0
+    },
+    {
+      "title": "After the Bankrupt Heiress Married into a Rich Family",
+      "primary_genre": "Adult",
+      "degree": 160,
+      "pagerank": 0.000214,
+      "rating_votes": 6.0
+    },
+    {
+      "title": "The Cold, Aloof Senior Sister Deserves To Be Paired With A Peerless Beauty",
+      "primary_genre": "Fantasy",
+      "degree": 162,
+      "pagerank": 0.000211,
+      "rating_votes": 4.0
+    },
+    {
+      "title": "Immortal Cultivation: Starting as a Fortune Cultivator",
+      "primary_genre": "Fantasy",
+      "degree": 130,
+      "pagerank": 0.000182,
+      "rating_votes": 8.0
+    },
+    {
+      "title": "After A Secret Marriage Agreement With A Rival Omega",
+      "primary_genre": "Adult",
+      "degree": 117,
+      "pagerank": 0.000153,
+      "rating_votes": 6.0
+    },
+    {
+      "title": "HardGuy’s Bizarre Adventure",
+      "primary_genre": "Action",
+      "degree": 103,
+      "pagerank": 0.000149,
+      "rating_votes": 13.0
+    },
+    {
+      "title": "I Tried to See How Far My Devoted Childhood Friend Would Go",
+      "primary_genre": "Romance",
+      "degree": 105,
+      "pagerank": 0.000148,
+      "rating_votes": 16.0
+    },
+    {
+      "title": "Exclusively Possessed By A Yandere Rich Girl",
+      "primary_genre": "Drama",
+      "degree": 112,
+      "pagerank": 0.000146,
+      "rating_votes": 4.0
+    },
+    {
+      "title": "Love Story of a Closeted L**bian",
+      "primary_genre": "Romance",
+      "degree": 105,
+      "pagerank": 0.000145,
+      "rating_votes": 18.0
+    },
+    {
+      "title": "Roaming the Jianghu for Twenty Years",
+      "primary_genre": "Action",
+      "degree": 108,
+      "pagerank": 0.000143,
+      "rating_votes": 2.0
+    }
+  ],
+  "community_profiles": [
+    {
+      "community": 0,
+      "size": 4684,
+      "top_genres": [
+        [
+          "Fantasy",
+          4205
+        ],
+        [
+          "Action",
+          3002
+        ],
+        [
+          "Adventure",
+          2883
+        ],
+        [
+          "Comedy",
+          1768
+        ]
+      ],
+      "top_origin": [
+        "JP",
+        0.423
+      ],
+      "avg_weighted_rating": 3.624,
+      "example_titles": [
+        "T*ash of the Count’s Family",
+        "Release that Witch",
+        "Dungeon Defense"
+      ]
+    },
+    {
+      "community": 1,
+      "size": 3367,
+      "top_genres": [
+        [
+          "Romance",
+          2738
+        ],
+        [
+          "Drama",
+          1876
+        ],
+        [
+          "Historical",
+          1681
+        ],
+        [
+          "Fantasy",
+          1493
+        ]
+      ],
+      "top_origin": [
+        "CN",
+        0.886
+      ],
+      "avg_weighted_rating": 3.692,
+      "example_titles": [
+        "The Founder of Diabolism",
+        "The Scum Villain’s Self-Saving System",
+        "Heaven Official’s Blessing"
+      ]
+    },
+    {
+      "community": 2,
+      "size": 3190,
+      "top_genres": [
+        [
+          "Romance",
+          2734
+        ],
+        [
+          "Drama",
+          1701
+        ],
+        [
+          "Comedy",
+          1341
+        ],
+        [
+          "Slice of Life",
+          1208
+        ]
+      ],
+      "top_origin": [
+        "CN",
+        0.797
+      ],
+      "avg_weighted_rating": 3.777,
+      "example_titles": [
+        "My Husband is Suffering from a Terminal Illness",
+        "Rebirth of a Movie Star",
+        "Reborn as My Love Rival’s Wife"
+      ]
+    },
+    {
+      "community": 3,
+      "size": 3031,
+      "top_genres": [
+        [
+          "Romance",
+          2855
+        ],
+        [
+          "Fantasy",
+          2694
+        ],
+        [
+          "Drama",
+          1729
+        ],
+        [
+          "Josei",
+          1189
+        ]
+      ],
+      "top_origin": [
+        "KR",
+        0.841
+      ],
+      "avg_weighted_rating": 3.626,
+      "example_titles": [
+        "The Reader and Protagonist Definitely Have to Be in True Love",
+        "Kenkyo, Kenjitsu o Motto ni Ikite Orimasu",
+        "Lucia"
+      ]
+    },
+    {
+      "community": 4,
+      "size": 2564,
+      "top_genres": [
+        [
+          "Romance",
+          2126
+        ],
+        [
+          "Drama",
+          1442
+        ],
+        [
+          "Yuri",
+          889
+        ],
+        [
+          "Fantasy",
+          789
+        ]
+      ],
+      "top_origin": [
+        "CN",
+        0.791
+      ],
+      "avg_weighted_rating": 3.58,
+      "example_titles": [
+        "A Game To Make Him Fall",
+        "The Probability I Can Kill My Wife Without Being Found Out",
+        "The Former Wife of Invisible Wealthy Man"
+      ]
+    },
+    {
+      "community": 5,
+      "size": 2399,
+      "top_genres": [
+        [
+          "Action",
+          1779
+        ],
+        [
+          "Fantasy",
+          1716
+        ],
+        [
+          "Adventure",
+          1516
+        ],
+        [
+          "Martial Arts",
+          948
+        ]
+      ],
+      "top_origin": [
+        "CN",
+        0.889
+      ],
+      "avg_weighted_rating": 3.542,
+      "example_titles": [
+        "Against the Gods",
+        "I Shall Seal the Heavens",
+        "Warlock of the Magus World"
+      ]
+    },
+    {
+      "community": 6,
+      "size": 2204,
+      "top_genres": [
+        [
+          "Romance",
+          1699
+        ],
+        [
+          "School Life",
+          1233
+        ],
+        [
+          "Comedy",
+          1042
+        ],
+        [
+          "Drama",
+          956
+        ]
+      ],
+      "top_origin": [
+        "JP",
+        0.673
+      ],
+      "avg_weighted_rating": 3.606,
+      "example_titles": [
+        "About the Reckless Girl Who Kept Challenging a Reborn Man Like Me",
+        "Every Vicious Woman Needs a Loyal Man",
+        "Kono Subarashii Sekai ni Shukufuku o!"
+      ]
+    },
+    {
+      "community": 7,
+      "size": 1941,
+      "top_genres": [
+        [
+          "Romance",
+          1611
+        ],
+        [
+          "Fantasy",
+          1129
+        ],
+        [
+          "Drama",
+          1000
+        ],
+        [
+          "Comedy",
+          872
+        ]
+      ],
+      "top_origin": [
+        "CN",
+        0.968
+      ],
+      "avg_weighted_rating": 3.657,
+      "example_titles": [
+        "Quickly Wear the Face of the Devil",
+        "Mistakenly Saving the Villain",
+        "Heroic Death System"
+      ]
+    }
+  ],
+  "homophily_reference_model": "ensemble",
+  "homophily": [
+    {
+      "genre": "Romance",
+      "n_novels": 25074,
+      "prevalence": 0.6322,
+      "neighbour_share": 0.7922,
+      "lift": 1.2531,
+      "f1": 0.8729
+    },
+    {
+      "genre": "Gender Bender",
+      "n_novels": 3024,
+      "prevalence": 0.0762,
+      "neighbour_share": 0.4619,
+      "lift": 6.0585,
+      "f1": 0.8559
+    },
+    {
+      "genre": "Yaoi",
+      "n_novels": 5482,
+      "prevalence": 0.1382,
+      "neighbour_share": 0.4866,
+      "lift": 3.5206,
+      "f1": 0.8275
+    },
+    {
+      "genre": "Fantasy",
+      "n_novels": 23121,
+      "prevalence": 0.583,
+      "neighbour_share": 0.7323,
+      "lift": 1.2561,
+      "f1": 0.827
+    },
+    {
+      "genre": "Yuri",
+      "n_novels": 5073,
+      "prevalence": 0.1279,
+      "neighbour_share": 0.503,
+      "lift": 3.9325,
+      "f1": 0.7725
+    },
+    {
+      "genre": "Action",
+      "n_novels": 12999,
+      "prevalence": 0.3278,
+      "neighbour_share": 0.6101,
+      "lift": 1.8613,
+      "f1": 0.7485
+    },
+    {
+      "genre": "Sports",
+      "n_novels": 699,
+      "prevalence": 0.0176,
+      "neighbour_share": 0.2414,
+      "lift": 13.6943,
+      "f1": 0.746
+    },
+    {
+      "genre": "Xianxia",
+      "n_novels": 3363,
+      "prevalence": 0.0848,
+      "neighbour_share": 0.5183,
+      "lift": 6.1121,
+      "f1": 0.7315
+    },
+    {
+      "genre": "Smut",
+      "n_novels": 2529,
+      "prevalence": 0.0638,
+      "neighbour_share": 0.3728,
+      "lift": 5.846,
+      "f1": 0.7059
+    },
+    {
+      "genre": "Horror",
+      "n_novels": 2432,
+      "prevalence": 0.0613,
+      "neighbour_share": 0.4464,
+      "lift": 7.2797,
+      "f1": 0.6946
+    },
+    {
+      "genre": "Historical",
+      "n_novels": 3253,
+      "prevalence": 0.082,
+      "neighbour_share": 0.4652,
+      "lift": 5.6717,
+      "f1": 0.6856
+    },
+    {
+      "genre": "Adventure",
+      "n_novels": 11343,
+      "prevalence": 0.286,
+      "neighbour_share": 0.5405,
+      "lift": 1.8899,
+      "f1": 0.6849
+    },
+    {
+      "genre": "Harem",
+      "n_novels": 6338,
+      "prevalence": 0.1598,
+      "neighbour_share": 0.4525,
+      "lift": 2.8313,
+      "f1": 0.6828
+    },
+    {
+      "genre": "School Life",
+      "n_novels": 4928,
+      "prevalence": 0.1243,
+      "neighbour_share": 0.4216,
+      "lift": 3.3928,
+      "f1": 0.6687
+    },
+    {
+      "genre": "Adult",
+      "n_novels": 5164,
+      "prevalence": 0.1302,
+      "neighbour_share": 0.3633,
+      "lift": 2.7905,
+      "f1": 0.6656
+    },
+    {
+      "genre": "Drama",
+      "n_novels": 15881,
+      "prevalence": 0.4004,
+      "neighbour_share": 0.5189,
+      "lift": 1.296,
+      "f1": 0.6608
+    },
+    {
+      "genre": "Wuxia",
+      "n_novels": 1311,
+      "prevalence": 0.0331,
+      "neighbour_share": 0.4152,
+      "lift": 12.5612,
+      "f1": 0.6512
+    },
+    {
+      "genre": "Comedy",
+      "n_novels": 13219,
+      "prevalence": 0.3333,
+      "neighbour_share": 0.4262,
+      "lift": 1.2787,
+      "f1": 0.6144
+    },
+    {
+      "genre": "Sci-fi",
+      "n_novels": 2735,
+      "prevalence": 0.069,
+      "neighbour_share": 0.3253,
+      "lift": 4.7166,
+      "f1": 0.5978
+    },
+    {
+      "genre": "Josei",
+      "n_novels": 4024,
+      "prevalence": 0.1015,
+      "neighbour_share": 0.3398,
+      "lift": 3.3493,
+      "f1": 0.5965
+    },
+    {
+      "genre": "Martial Arts",
+      "n_novels": 3916,
+      "prevalence": 0.0987,
+      "neighbour_share": 0.3985,
+      "lift": 4.0357,
+      "f1": 0.5595
+    },
+    {
+      "genre": "Mecha",
+      "n_novels": 696,
+      "prevalence": 0.0175,
+      "neighbour_share": 0.2382,
+      "lift": 13.5743,
+      "f1": 0.5486
+    },
+    {
+      "genre": "Slice of Life",
+      "n_novels": 8649,
+      "prevalence": 0.2181,
+      "neighbour_share": 0.353,
+      "lift": 1.6187,
+      "f1": 0.5467
+    },
+    {
+      "genre": "Shounen",
+      "n_novels": 4537,
+      "prevalence": 0.1144,
+      "neighbour_share": 0.3164,
+      "lift": 2.7661,
+      "f1": 0.529
+    },
+    {
+      "genre": "Xuanhuan",
+      "n_novels": 2583,
+      "prevalence": 0.0651,
+      "neighbour_share": 0.3417,
+      "lift": 5.2466,
+      "f1": 0.5257
+    },
+    {
+      "genre": "Ecchi",
+      "n_novels": 2632,
+      "prevalence": 0.0664,
+      "neighbour_share": 0.3012,
+      "lift": 4.5388,
+      "f1": 0.5196
+    },
+    {
+      "genre": "Supernatural",
+      "n_novels": 6737,
+      "prevalence": 0.1699,
+      "neighbour_share": 0.3327,
+      "lift": 1.9586,
+      "f1": 0.5163
+    },
+    {
+      "genre": "Shoujo",
+      "n_novels": 3368,
+      "prevalence": 0.0849,
+      "neighbour_share": 0.2911,
+      "lift": 3.4276,
+      "f1": 0.4993
+    },
+    {
+      "genre": "Mature",
+      "n_novels": 5232,
+      "prevalence": 0.1319,
+      "neighbour_share": 0.2727,
+      "lift": 2.0669,
+      "f1": 0.4922
+    },
+    {
+      "genre": "Shounen Ai",
+      "n_novels": 1855,
+      "prevalence": 0.0468,
+      "neighbour_share": 0.1657,
+      "lift": 3.542,
+      "f1": 0.4869
+    },
+    {
+      "genre": "Psychological",
+      "n_novels": 3951,
+      "prevalence": 0.0996,
+      "neighbour_share": 0.2309,
+      "lift": 2.3179,
+      "f1": 0.4689
+    },
+    {
+      "genre": "Mystery",
+      "n_novels": 3911,
+      "prevalence": 0.0986,
+      "neighbour_share": 0.2835,
+      "lift": 2.8752,
+      "f1": 0.4659
+    },
+    {
+      "genre": "Tragedy",
+      "n_novels": 2779,
+      "prevalence": 0.0701,
+      "neighbour_share": 0.1707,
+      "lift": 2.4355,
+      "f1": 0.4078
+    },
+    {
+      "genre": "Seinen",
+      "n_novels": 2294,
+      "prevalence": 0.0578,
+      "neighbour_share": 0.196,
+      "lift": 3.3889,
+      "f1": 0.3806
+    },
+    {
+      "genre": "Shoujo Ai",
+      "n_novels": 690,
+      "prevalence": 0.0174,
+      "neighbour_share": 0.0569,
+      "lift": 3.268,
+      "f1": 0.1873
+    }
+  ],
+  "spearman_f1": {
+    "neighbour_share": [
+      0.8437,
+      1.9616922267148202e-10
+    ],
+    "lift": [
+      0.1213,
+      0.4876433348131164
+    ],
+    "prevalence": [
+      0.3479,
+      0.04056782464190906
+    ]
+  },
+  "partial_spearman_f1_share_given_prevalence": 0.8573
+}

@@ -19,7 +19,7 @@ frame = frame.copy()  # rapikan fragmentasi kolom
 
 res = []
 
-# --- simpan OOF baseline untuk dipakai audit label (bagian 3) --------------
+# simpan OOF baseline untuk dipakai audit label (bagian 3)
 base = Pipeline([("features", build_union(FeatureConfig(), True, None, 1.0)),
                  ("clf", head("svm", 0.3, "balanced"))])
 oof = out_of_fold_probabilities(base, frame.iloc[dev], y[dev])
@@ -29,7 +29,7 @@ np.save(ART + "_th_baseline.npy", th)
 np.save(ART + "_dev_idx.npy", dev)
 print("OOF baseline disimpan | makro OOF %.4f\n" % ev.evaluate(y[dev], oof, th)["f1_macro"])
 
-# --- sapuan bobot embedding pada dua kepala klasifikasi -------------------
+# sapuan bobot embedding pada dua kepala klasifikasi
 for kind, C in (("svm", 0.3), ("logreg", 4.0)):
     for w in (0.5, 1.0, 2.0, 3.0, 5.0):
         res.append(run(f"fusi {kind} w={w}", frame, y, labels, dev, test,

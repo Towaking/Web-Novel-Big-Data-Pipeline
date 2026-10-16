@@ -70,8 +70,11 @@ def train_single(
     feature_config: FeatureConfig | None = None,
     aug_config: AugmentationConfig | None = None,
     param_grid: list[dict] | None = None,
-) -> tuple[object, np.ndarray, dict]:
-    """Latih satu arsitektur: cari konfigurasi, setel ambang, uji sekali."""
+) -> tuple[object, np.ndarray, dict, np.ndarray, np.ndarray]:
+    """Latih satu arsitektur: cari konfigurasi, setel ambang, uji sekali.
+
+    Probabilitas OOF dan uji konfigurasi terpilih ikut dikembalikan untuk ensemble.
+    """
     meta = mdl.MODEL_CATALOG[name]
     grid = param_grid if param_grid is not None else mdl.PARAM_GRID[name]
     x_dev, x_test = frame.iloc[dev_idx], frame.iloc[test_idx]
@@ -87,11 +90,13 @@ def train_single(
         score = ev.evaluate(y_dev, prob_oof, thresholds)["f1_macro"]
         logger.info("      %s -> makro-F1 OOF %.4f", params, score)
         if score > best["score"]:
-            best = {"score": score, "params": params, "thresholds": thresholds}
+            best = {"score": score, "params": params, "thresholds": thresholds, "prob_oof": prob_oof}
 
     logger.info("  [%s] konfigurasi terpilih: %s", name, best["params"])
     model = mdl.build_model(name, feature_config, aug_config, **best["params"])
     model.fit(x_dev, y_dev)
+    # Dirampingkan sebelum diuji, jadi angka uji berasal dari model yang benar-benar disimpan.
+    mdl.shrink_coefficients(model)
 
     thresholds = best["thresholds"]
     prob_test = mdl.predict_proba_frame(model, x_test)
@@ -115,7 +120,47 @@ def train_single(
         "  [%s] UJI: F1 makro=%.4f mikro=%.4f P@3=%.4f | ambang seragam 0,5: makro=%.4f",
         name, scores["f1_macro"], scores["f1_micro"], scores["precision_at_3"], fixed["f1_macro"],
     )
-    return model, thresholds, scores
+    return model, thresholds, scores, best["prob_oof"], prob_test
+
+
+def blend_members(
+    probs: dict, y: np.ndarray, labels: list[str], dev_idx: np.ndarray, test_idx: np.ndarray
+) -> tuple[dict, np.ndarray, dict]:
+    """
+    Gabungan berbobot anggota ensemble di ruang log-odds (`ev.blend_probabilities`).
+
+    Bobot dipilih di grid 0,0-1,0 atas probabilitas OOF, persis seperti hyperparameter.
+    """
+    first, second = mdl.ENSEMBLE_MEMBERS
+    space = mdl.ENSEMBLE_SPACE
+    y_dev, y_test = y[dev_idx], y[test_idx]
+    best = None
+    for weight in np.round(np.arange(0.0, 1.0001, 0.1), 1):
+        mixed = ev.blend_probabilities([(weight, probs[first][0]), (1 - weight, probs[second][0])], space)
+        thresholds = ev.tune_thresholds(y_dev, mixed, labels)
+        score = ev.evaluate(y_dev, mixed, thresholds)["f1_macro"]
+        if best is None or score > best[0]:
+            best = (score, float(weight), thresholds)
+    score, weight, thresholds = best
+    weights = {first: weight, second: round(1.0 - weight, 1)}
+
+    prob_test = ev.blend_probabilities([(weight, probs[first][1]), (1 - weight, probs[second][1])], space)
+    scores = ev.evaluate(y_test, prob_test, thresholds)
+    fixed = ev.evaluate(y_test, prob_test, np.full(len(labels), 0.5, dtype=np.float32))
+    scores.update(
+        {
+            "f1_micro_fixed_threshold": fixed["f1_micro"],
+            "f1_macro_fixed_threshold": fixed["f1_macro"],
+            "f1_macro_oof": round(float(score), 4),
+            "params": {"weights": str(weights), "space": space},
+            "threshold_mean": round(float(thresholds.mean()), 3),
+            "f1_per_label": ev.per_label_scores(y_test, prob_test, thresholds, labels),
+            **mdl.MODEL_CATALOG["ensemble"],
+        }
+    )
+    logger.info("  [ensemble] bobot %s | OOF %.4f | UJI: F1 makro=%.4f mikro=%.4f",
+                weights, score, scores["f1_macro"], scores["f1_micro"])
+    return weights, thresholds, scores
 
 
 def train_all(
@@ -129,14 +174,40 @@ def train_all(
     aug_config: AugmentationConfig | None = None,
 ) -> tuple[dict, dict]:
     """Latih seluruh arsitektur pada pembagian data yang identik."""
-    artifacts, metrics = {}, {}
-    for name in names or list(mdl.MODEL_CATALOG):
-        model, thresholds, scores = train_single(
+    from Model.pipeline.embeddings import reserve
+
+    # Seluruh korpus (fold CV + fit akhir + uji) harus muat di memo embedding;
+    # ~40 ribu x 384 float32 = ~60 MB.
+    reserve(2 * len(frame))
+    artifacts, metrics, probs = {}, {}, {}
+    requested = list(names or mdl.MODEL_CATALOG)
+    for name in requested:
+        if name == "ensemble":
+            continue
+        model, thresholds, scores, prob_oof, prob_test = train_single(
             name, frame, y, labels, dev_idx, test_idx, feature_config, aug_config
         )
-        artifacts[name] = {"pipeline": model, "thresholds": thresholds}
+        # `labels` ikut disimpan per model: penggabungan latih-parsial
+        # (Model/train.py --models) harus bisa memastikan semua model berbagi
+        # ruang label yang sama dengan genre_binarizer.
+        artifacts[name] = {"pipeline": model, "thresholds": thresholds, "labels": list(labels)}
         metrics[name] = scores
+        probs[name] = (prob_oof, prob_test)
 
-    best = max(metrics, key=lambda k: metrics[k]["f1_macro"])
-    logger.info("Model terbaik menurut makro-F1: %s (%.4f)", best, metrics[best]["f1_macro"])
+    if "ensemble" in requested:
+        missing = [m for m in mdl.ENSEMBLE_MEMBERS if m not in probs]
+        if missing:
+            logger.warning("Ensemble dilewati: %s tidak dilatih pada run ini.", ", ".join(missing))
+        else:
+            # Hanya bobot yang disimpan; pipeline anggota sudah ada di artefak masing-masing.
+            weights, thresholds, scores = blend_members(probs, y, labels, dev_idx, test_idx)
+            artifacts["ensemble"] = {"members": weights, "space": mdl.ENSEMBLE_SPACE,
+                                     "thresholds": thresholds, "labels": list(labels)}
+            metrics["ensemble"] = scores
+
+    # Dipilih dari skor OOF set dev, bukan skor uji: memilih model berdasarkan
+    # set uji membuat skor uji pemenang bias optimistis (set uji ikut seleksi).
+    best = max(metrics, key=lambda k: metrics[k]["f1_macro_oof"])
+    logger.info("Model terbaik menurut makro-F1 OOF: %s (OOF %.4f, uji %.4f)",
+                best, metrics[best]["f1_macro_oof"], metrics[best]["f1_macro"])
     return artifacts, {"models": metrics, "best_model": best, "labels": labels}

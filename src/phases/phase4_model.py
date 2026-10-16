@@ -41,11 +41,14 @@ Karena itu arsitekturnya adalah **satu representasi bersama, empat kepala model*
    │           (cosine kNN)   (KMeans+silh.)    (HistGradientBoosting)
    ├── Logistic Regression  (linear, TF-IDF sparse)
    ├── Linear SVM           (margin, kalibrasi Platt)
-   ├── Hybrid TF-IDF+BGE    (sparse + padat pralatih)  <- terbaik
-   └── BiLSTM + Attention   (rekuren, embedding dari nol)
+   ├── Random Forest        (pohon multi-output, TF-IDF terseleksi chi-kuadrat)
+   └── Ensemble SVM + RF    (rata-rata probabilitas berbobot)
 
-Head A punya EMPAT model yang dapat dipilih pengguna di dashboard; keempatnya
-dilatih dan diuji pada pembagian data yang sama sehingga perbandingannya adil.
+Head A melatih tiga model ML klasik dan satu ensemble yang dapat dipilih pengguna
+di dashboard; semuanya diuji pada pembagian data yang sama sehingga perbandingannya
+adil, dan model bawaan dipilih dari skor OOF. Hybrid (TF-IDF + encoder BGE) dan
+BiLSTM masih ada di katalog arsitektur, tetapi hanya dilatih bila diminta lewat
+PHASE4_MODELS.
 Detail arsitektur & penyetelan ambangnya ada di `src/phases/genre_models.py`.
 
 Head B/C/D memakai representasi bersama di atas: vectorizer hanya dilatih
@@ -65,11 +68,11 @@ Jalankan:
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import joblib
 import numpy as np
 import pandas as pd
 from pyspark.ml.feature import StopWordsRemover
@@ -87,6 +90,8 @@ from sklearn.metrics import (
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MultiLabelBinarizer, normalize
 
+from Model.pipeline.rating import HGB_PARAMS, RatingModel
+from src.common.artifact_io import dump_artifact
 from src.common.config import get_settings
 from src.common.logging_utils import get_logger, log_section
 from src.common.spark_session import spark_session
@@ -95,7 +100,7 @@ from src.phases.phase2_clean import DOMAIN_STOPWORDS
 
 logger = get_logger("phase4.model")
 
-# --- Hiperparameter ---------------------------------------------------------
+# Hiperparameter
 SVD_COMPONENTS = 200        # ~menjelaskan mayoritas variansi pada korpus sependek ini
 MIN_GENRE_SUPPORT = 50      # genre dengan <50 novel tidak cukup untuk dilatih
 KMEANS_K_GRID = (5, 6, 7, 8, 9, 10)
@@ -105,9 +110,7 @@ TEST_SIZE = 0.2
 ARTIFACT_DIR = Path("/opt/project/Model/artifacts")
 
 
-# ===========================================================================
 # Pemuatan data
-# ===========================================================================
 def load_training_frame() -> tuple[pd.DataFrame, list[str]]:
     """
     Tarik data bersih dari lake lewat Spark, lalu materialisasi ke pandas.
@@ -138,6 +141,10 @@ def load_training_frame() -> tuple[pd.DataFrame, list[str]]:
             "synopsis_word_count", "has_synopsis",
             # Kecepatan rilis (hari per bab) — fitur numerik baru untuk Head D.
             "days_per_chapter",
+            # Bukan fitur model. Baris tier 'listing' ber-series_id sintetis
+            # negatif, jadi setelah diurutkan selalu berada paling atas dengan
+            # bab/rating NULL. Kolom ini membuat alasannya terlihat.
+            "metadata_tier",
         )
         pdf = selected.toPandas()
 
@@ -162,9 +169,7 @@ def load_training_frame() -> tuple[pd.DataFrame, list[str]]:
     return pdf, stopwords
 
 
-# ===========================================================================
 # Representasi bersama: TF-IDF -> SVD
-# ===========================================================================
 def build_representation(corpus: pd.Series) -> tuple[TfidfVectorizer, TruncatedSVD, np.ndarray, np.ndarray]:
     """
     Bangun ruang fitur bersama.
@@ -196,17 +201,17 @@ def build_representation(corpus: pd.Series) -> tuple[TfidfVectorizer, TruncatedS
     return vectorizer, svd, tfidf, embeddings
 
 
-# ===========================================================================
 # HEAD A — Genre Tagger (klasifikasi multi-label)
-# ===========================================================================
-def build_genre_frame(pdf: pd.DataFrame) -> pd.DataFrame:
-    """Bentuk tabel fitur Head A (delegasi ke paket pipeline)."""
+def build_genre_frame(pdf: pd.DataFrame, stopwords: list[str] | None = None) -> pd.DataFrame:
+    """Tabel fitur Head A; dengan `stopwords` teks dibangun ulang dan sensornya dipulihkan."""
     from Model.pipeline.preprocessing import build_feature_frame
 
-    return build_feature_frame(pdf)
+    return build_feature_frame(pdf, stopwords=stopwords)
 
 
-def train_genre_tagger(pdf: pd.DataFrame, names: list | None = None) -> tuple[dict, MultiLabelBinarizer, dict]:
+def train_genre_tagger(
+    pdf: pd.DataFrame, names: list | None = None, frame: pd.DataFrame | None = None
+) -> tuple[dict, MultiLabelBinarizer, dict]:
     """
     Latih arsitektur genre tagger dan kembalikan seluruhnya.
 
@@ -221,7 +226,8 @@ def train_genre_tagger(pdf: pd.DataFrame, names: list | None = None) -> tuple[di
     total_genres = len({g for row in pdf["genre_list"] if row is not None for g in row})
     logger.info("Genre dipakai: %d dari %d (ambang >= %d novel)", len(kept), total_genres, MIN_GENRE_SUPPORT)
 
-    frame = build_genre_frame(pdf)
+    if frame is None:
+        frame = build_genre_frame(pdf)
     dev_idx, test_idx = pipeline_train.split_indices(len(frame))
     logger.info(
         "Pembagian data: pengembangan=%s (ambang via OOF %d-fold), uji=%s",
@@ -240,9 +246,7 @@ def train_genre_tagger(pdf: pd.DataFrame, names: list | None = None) -> tuple[di
     return artifacts, mlb, metrics
 
 
-# ===========================================================================
 # HEAD C — Archetype Clustering
-# ===========================================================================
 def train_clustering(embeddings: np.ndarray, vectorizer, tfidf, pdf: pd.DataFrame) -> tuple[KMeans, dict]:
     """
     Segmentasi katalog menjadi arketipe cerita.
@@ -285,7 +289,8 @@ def train_clustering(embeddings: np.ndarray, vectorizer, tfidf, pdf: pd.DataFram
                 "top_terms": top_terms,
                 "top_genres": genres.value_counts().head(5).to_dict(),
                 "avg_weighted_rating": round(float(subset["weighted_rating"].mean(skipna=True)), 4),
-                "avg_chapters": round(float(subset["chapter_count"].mean(skipna=True)), 1),
+                # 3 desimal: tampilan membulatkan lagi ke bab utuh, 1 desimal (654,5) membuatnya salah arah.
+                "avg_chapters": round(float(subset["chapter_count"].mean(skipna=True)), 3),
                 "example_titles": subset.nlargest(5, "rating_votes")["title"].tolist(),
             }
         )
@@ -294,9 +299,7 @@ def train_clustering(embeddings: np.ndarray, vectorizer, tfidf, pdf: pd.DataFram
     return kmeans, {"best_k": int(best_k), "silhouette_by_k": scores, "profiles": profiles}
 
 
-# ===========================================================================
 # HEAD D — Rating Estimator
-# ===========================================================================
 def build_numeric_features(pdf: pd.DataFrame) -> tuple[np.ndarray, list[str]]:
     """
     Fitur non-teks untuk regressor.
@@ -336,9 +339,14 @@ def build_numeric_features(pdf: pd.DataFrame) -> tuple[np.ndarray, list[str]]:
     return frame.to_numpy(dtype=np.float32), frame.columns.tolist()
 
 
+def rating_texts(frame: pd.DataFrame) -> list[str]:
+    """Teks masukan skor ridge Head D: korpus bersih + tag (sama seperti inferensi)."""
+    return (frame["corpus_clean"].astype(str) + " " + frame["tags_clean"].astype(str)).tolist()
+
+
 def train_rating_estimator(
-    embeddings: np.ndarray, pdf: pd.DataFrame
-) -> tuple[HistGradientBoostingRegressor | None, dict, list[str]]:
+    embeddings: np.ndarray, pdf: pd.DataFrame, frame: pd.DataFrame | None = None
+) -> tuple[RatingModel | None, dict, list[str]]:
     """
     Regresi `rating_score` dari konten.
 
@@ -349,30 +357,51 @@ def train_rating_estimator(
     HistGradientBoosting dipilih ketimbang regresi linear karena hubungan
     fitur-rating jelas non-linear (lihat Fase 3: rating naik lalu turun
     terhadap panjang novel) dan ia menangani ratusan fitur padat dengan cepat.
+    Fitur & bobotnya dijelaskan di `Model/pipeline/rating.py`; `frame` adalah
+    tabel teks Head A agar skor ridge melihat teks yang sama dengan inferensi.
     """
+    if frame is None:
+        frame = build_genre_frame(pdf)
     numeric, feature_names = build_numeric_features(pdf)
     mask = pdf["is_rated_reliable"].fillna(False).to_numpy(dtype=bool)
-    x = np.hstack([embeddings, numeric])[mask]
+    rows = np.flatnonzero(mask)
     y = pdf.loc[mask, "rating_score"].to_numpy(dtype=np.float32)
+    # Rating dari 500 suara lebih stabil daripada dari 10 suara.
+    weights = np.log1p(pdf.loc[mask, "rating_votes"].fillna(0).to_numpy(dtype=np.float32))
+    texts = np.asarray(rating_texts(frame), dtype=object)
+    tags = pdf["tags"].fillna("").to_numpy(dtype=object)
 
     if len(y) < 200:
         logger.warning("HEAD D dilewati: populasi rating tepercaya terlalu kecil (%d).", len(y))
         return None, {"trained": False, "reason": "populasi terlalu kecil"}, feature_names
 
-    x_train, x_test, y_train, y_test = train_test_split(
-        x, y, test_size=TEST_SIZE, random_state=RANDOM_STATE
+    # Pembagian sama dengan versi lama, jadi angka sebelum/sesudah memakai baris uji yang sama.
+    pos_train, pos_test = train_test_split(
+        np.arange(len(rows)), test_size=TEST_SIZE, random_state=RANDOM_STATE
     )
-    model = HistGradientBoostingRegressor(
-        max_iter=400,
-        learning_rate=0.06,
-        max_depth=6,
-        l2_regularization=1.0,
-        random_state=RANDOM_STATE,
-        early_stopping=True,
-        validation_fraction=0.15,
+    train, test = rows[pos_train], rows[pos_test]
+    y_train, y_test = y[pos_train], y[pos_test]
+
+    # Untuk evaluasi, TF-IDF + SVD di-fit tanpa baris uji, sama seperti judul baru di produksi
+    # yang tidak ikut membentuk representasi bersama.
+    held_out = np.setdiff1d(np.arange(len(frame)), test)
+    eval_vectorizer, eval_svd, _, _ = build_representation(frame["corpus_clean"].iloc[held_out])
+    eval_embeddings = normalize(
+        eval_svd.transform(eval_vectorizer.transform(frame["corpus_clean"]))
+    ).astype(np.float32)
+
+    model = RatingModel(HGB_PARAMS, feature_names, random_state=RANDOM_STATE).fit(
+        eval_embeddings[train], numeric[train], list(texts[train]), list(tags[train]), y_train,
+        sample_weight=weights[pos_train],
     )
-    model.fit(x_train, y_train)
-    pred = model.predict(x_test)
+    pred = model.predict(eval_embeddings[test], numeric[test], list(texts[test]), list(tags[test]))
+
+    # Pembanding: konfigurasi lama (embedding + numerik, tanpa bobot) pada baris latih yang sama.
+    previous = HistGradientBoostingRegressor(
+        max_iter=400, learning_rate=0.06, max_depth=6, l2_regularization=1.0,
+        random_state=RANDOM_STATE, early_stopping=True, validation_fraction=0.15,
+    ).fit(np.hstack([eval_embeddings, numeric])[train], y_train)
+    pred_previous = previous.predict(np.hstack([eval_embeddings, numeric])[test])
 
     # Baseline = selalu menebak rata-rata. Model yang tidak mengalahkan ini
     # tidak layak dipakai, dan itu harus dilaporkan apa adanya.
@@ -386,28 +415,40 @@ def train_rating_estimator(
         "r2": round(float(r2_score(y_test, pred)), 4),
         "baseline_mae": round(float(mean_absolute_error(y_test, baseline)), 4),
         "baseline_rmse": round(float(np.sqrt(mean_squared_error(y_test, baseline))), 4),
+        "previous_config": {
+            "mae": round(float(mean_absolute_error(y_test, pred_previous)), 4),
+            "rmse": round(float(np.sqrt(mean_squared_error(y_test, pred_previous))), 4),
+            "r2": round(float(r2_score(y_test, pred_previous)), 4),
+            "features": "embedding SVD + numerik, tanpa bobot sampel",
+        },
+        "features": {
+            "embedding_svd": int(embeddings.shape[1]),
+            "numeric": len(feature_names),
+            "ridge_text_score": 1,
+            "tag_multi_hot": model.n_tag_features,
+        },
+        "hgb_params": {k: v for k, v in HGB_PARAMS.items() if v is not None},
+        "n_iter": int(model.hgb_.n_iter_),
+        "sample_weight": "log1p(rating_votes)",
+        "evaluation_representation": "TF-IDF + SVD di-fit tanpa baris uji",
         "target": "rating_score (populasi >= 10 suara)",
     }
     metrics["improvement_over_baseline_pct"] = round(
         100 * (metrics["baseline_mae"] - metrics["mae"]) / metrics["baseline_mae"], 2
     )
     logger.info(
-        "HEAD D | MAE=%.4f (baseline %.4f, +%.1f%%) | RMSE=%.4f | R2=%.4f",
+        "HEAD D | MAE=%.4f (baseline %.4f, +%.1f%%; konfigurasi lama %.4f) | RMSE=%.4f | R2=%.4f",
         metrics["mae"], metrics["baseline_mae"], metrics["improvement_over_baseline_pct"],
-        metrics["rmse"], metrics["r2"],
+        metrics["previous_config"]["mae"], metrics["rmse"], metrics["r2"],
     )
 
-    model_full = HistGradientBoostingRegressor(
-        max_iter=400, learning_rate=0.06, max_depth=6, l2_regularization=1.0,
-        random_state=RANDOM_STATE, early_stopping=True, validation_fraction=0.15,
+    model_full = RatingModel(HGB_PARAMS, feature_names, random_state=RANDOM_STATE).fit(
+        embeddings[rows], numeric[rows], list(texts[rows]), list(tags[rows]), y, sample_weight=weights,
     )
-    model_full.fit(x, y)
     return model_full, metrics, feature_names
 
 
-# ===========================================================================
 # HEAD B — evaluasi kualitatif recommender
-# ===========================================================================
 def evaluate_recommender(embeddings: np.ndarray, pdf: pd.DataFrame, k: int = 10) -> dict:
     """
     Ukur kualitas rekomendasi tanpa ground-truth perilaku.
@@ -436,42 +477,65 @@ def evaluate_recommender(embeddings: np.ndarray, pdf: pd.DataFrame, k: int = 10)
     return {"genre_overlap_at_k": round(score, 4), "k": k, "n_sampled": len(overlaps)}
 
 
-# ===========================================================================
 # Persistensi artefak
-# ===========================================================================
+def _write_atomic(path: Path, write) -> None:
+    """
+    Tulis ke `<nama>.tmp` lalu ganti nama: pembaca (Streamlit) tidak pernah
+    melihat berkas yang setengah tertulis, dan kegagalan di tengah tidak
+    merusak versi sebelumnya.
+    """
+    tmp = path.with_name(path.name + ".tmp")
+    write(tmp)
+    os.replace(tmp, path)
+
+
 def save_artifacts(**artifacts) -> None:
     """Simpan seluruh artefak ke direktori bind-mount agar dibaca Streamlit."""
     ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
     for name, obj in artifacts.items():
-        if obj is None:
-            continue
         path = ARTIFACT_DIR / f"{name}.joblib"
-        joblib.dump(obj, path, compress=3)
+        if obj is None:
+            # Berkas dari run lama (mis. regressor saat Head D kini dilewati)
+            # dilatih di ruang fitur lama - jangan dibiarkan termuat.
+            if path.is_file():
+                path.unlink()
+                logger.info("Artefak basi dihapus: %s", path.name)
+            continue
+        if name == "genre_models":
+            from Model.pipeline.models import share_feature_steps
+
+            shared = share_feature_steps(obj)
+            if shared:
+                logger.info("Langkah fitur identik dipakai bersama oleh: %s", ", ".join(shared))
+        _write_atomic(path, lambda tmp, obj=obj: dump_artifact(obj, tmp))
         logger.info("Artefak tersimpan: %s (%.2f MB)", path.name, path.stat().st_size / 1_048_576)
 
 
-def run() -> dict:
-    log_section(logger, "fase 4 - model (arsitektur ai multi-head)")
+def persist_run(
+    pdf: pd.DataFrame,
+    stopwords: list[str],
+    vectorizer,
+    svd,
+    tfidf,
+    embeddings: np.ndarray,
+    genre_artifacts: dict,
+    mlb: MultiLabelBinarizer,
+    metrics_a: dict,
+    metrics_b: dict,
+    kmeans,
+    metrics_c: dict,
+    regressor,
+    metrics_d: dict,
+    numeric_features: list[str],
+    upload: bool = True,
+) -> dict:
+    """
+    Tulis seluruh artefak satu run Fase 4 dan kembalikan isi metrics.json.
 
-    pdf, stopwords = load_training_frame()
-
-    logger.info(">> Membangun representasi bersama (TF-IDF -> SVD)")
-    vectorizer, svd, tfidf, embeddings = build_representation(pdf["corpus_clean"].fillna(""))
-
-    logger.info(">> HEAD A: genre tagger (%d arsitektur, multi-label)",
-                len(genre_models.MODEL_CATALOG))
-    genre_artifacts, mlb, metrics_a = train_genre_tagger(pdf)
-
-    logger.info(">> HEAD B: content-based recommender")
-    metrics_b = evaluate_recommender(embeddings, pdf)
-
-    logger.info(">> HEAD C: archetype clustering")
-    kmeans, metrics_c = train_clustering(embeddings, vectorizer, tfidf, pdf)
-
-    logger.info(">> HEAD D: rating estimator")
-    regressor, metrics_d, numeric_features = train_rating_estimator(embeddings, pdf)
-
-    # --- Katalog untuk recommender (metadata ringan, tanpa kolom teks berat)
+    Dipakai `run()` dan notebook `model_training.ipynb`, supaya keduanya
+    menyimpan dengan cara yang sama (penulisan atomik, metrics.json paling akhir).
+    """
+    # Katalog untuk recommender (metadata ringan, tanpa kolom teks berat)
     catalog = pdf[
         ["series_id", "title", "url", "primary_genre", "genre_list", "tags", "type_origin",
          "year", "chapter_count", "rating_score", "rating_votes", "weighted_rating", "n_tags",
@@ -481,8 +545,12 @@ def run() -> dict:
     catalog["genre_list"] = catalog["genre_list"].apply(lambda g: list(g) if g is not None else [])
 
     ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
-    catalog.to_parquet(ARTIFACT_DIR / "catalog.parquet", index=False)
-    np.save(ARTIFACT_DIR / "embeddings.npy", embeddings)
+    _write_atomic(ARTIFACT_DIR / "catalog.parquet", lambda tmp: catalog.to_parquet(tmp, index=False))
+    # np.save menambahkan ".npy" bila nama tidak berakhiran itu - tulis lewat handle.
+    def _save_npy(tmp):
+        with open(tmp, "wb") as fh:
+            np.save(fh, embeddings)
+    _write_atomic(ARTIFACT_DIR / "embeddings.npy", _save_npy)
     logger.info("Katalog (%s baris) & embedding %s tersimpan.", f"{len(catalog):,}", embeddings.shape)
 
     save_artifacts(
@@ -495,6 +563,20 @@ def run() -> dict:
         kmeans=kmeans,
         rating_regressor=regressor,
     )
+
+    # Angka model riset yang tidak disajikan (hybrid, bilstm) dibawa dari metrics.json lama
+    # selama model itu tidak dilatih ulang di run ini.
+    previous_path = ARTIFACT_DIR / "metrics.json"
+    if previous_path.is_file():
+        try:
+            previous = json.loads(previous_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            previous = {}
+        excluded = {name: entry for name, entry in
+                    previous.get("head_a_genre_tagger", {}).get("excluded_models", {}).items()
+                    if name not in metrics_a.get("models", {})}
+        if excluded:
+            metrics_a = {**metrics_a, "excluded_models": excluded}
 
     metrics = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -511,11 +593,50 @@ def run() -> dict:
         "numeric_features": numeric_features,
         "stopwords": stopwords,
     }
-    (ARTIFACT_DIR / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    # metrics.json ditulis paling akhir: dashboard memakai waktu ubahnya sebagai
+    # penanda bahwa satu set artefak sudah lengkap (lihat get_registry).
+    _write_atomic(
+        ARTIFACT_DIR / "metrics.json",
+        lambda tmp: tmp.write_text(json.dumps(metrics, indent=2), encoding="utf-8"),
+    )
     logger.info("Metrik & konfigurasi ditulis ke %s", ARTIFACT_DIR / "metrics.json")
 
-    # Artefak juga disalin ke curated zone sebagai cadangan yang dapat diaudit.
-    _upload_artifacts_to_lake()
+    if upload:
+        # Artefak juga disalin ke curated zone sebagai cadangan yang dapat diaudit.
+        _upload_artifacts_to_lake()
+    return metrics
+
+
+def run() -> dict:
+    log_section(logger, "fase 4 - model (arsitektur ai multi-head)")
+
+    pdf, stopwords = load_training_frame()
+    # Satu tabel teks (sensor dipulihkan) untuk keempat kepala, sama dengan jalur inferensi.
+    frame = build_genre_frame(pdf, stopwords)
+
+    logger.info(">> Membangun representasi bersama (TF-IDF -> SVD)")
+    vectorizer, svd, tfidf, embeddings = build_representation(frame["corpus_clean"])
+
+    # Kosong = DEFAULT_MODELS (ML klasik). PHASE4_MODELS=logreg,svm,hybrid menambah model neural.
+    names = ([n.strip() for n in os.environ.get("PHASE4_MODELS", "").split(",") if n.strip()]
+             or list(genre_models.DEFAULT_MODELS))
+    logger.info(">> HEAD A: genre tagger (%s, multi-label)", ", ".join(names))
+    genre_artifacts, mlb, metrics_a = train_genre_tagger(pdf, names=names, frame=frame)
+
+    logger.info(">> HEAD B: content-based recommender")
+    metrics_b = evaluate_recommender(embeddings, pdf)
+
+    logger.info(">> HEAD C: archetype clustering")
+    kmeans, metrics_c = train_clustering(embeddings, vectorizer, tfidf, pdf)
+
+    logger.info(">> HEAD D: rating estimator")
+    regressor, metrics_d, numeric_features = train_rating_estimator(embeddings, pdf, frame)
+
+    metrics = persist_run(
+        pdf, stopwords, vectorizer, svd, tfidf, embeddings,
+        genre_artifacts, mlb, metrics_a, metrics_b, kmeans, metrics_c,
+        regressor, metrics_d, numeric_features,
+    )
 
     logger.info("FASE 4 SELESAI")
     return metrics
@@ -526,8 +647,9 @@ def _upload_artifacts_to_lake() -> None:
     from src.common.storage import upload_file
 
     settings = get_settings()
+    # `_*` are local research caches (embeddings, frames), not served artefacts.
     for path in sorted(ARTIFACT_DIR.iterdir()):
-        if path.is_file():
+        if path.is_file() and not path.name.startswith("_"):
             upload_file(path, settings.minio.bucket_curated, f"models/{path.name}", settings)
 
 

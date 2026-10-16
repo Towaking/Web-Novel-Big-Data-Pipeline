@@ -1,0 +1,7 @@
+{"name": "svm_saja", "oof_macro": 0.6022, "cvthr_macro": 0.6, "oof_p3": 0.7987, "test_macro": 0.6101, "test_micro": 0.6712, "test_p3": 0.8017, "test_p1": 0.9037}
+{"name": "prob_bebas_w0.6", "oof_macro": 0.6057, "cvthr_macro": 0.6041, "oof_p3": 0.7958, "test_macro": 0.6141, "test_micro": 0.6766, "test_p3": 0.7978, "test_p1": 0.8971, "w_svm": 0.6}
+{"name": "prob_p3dijaga_w0.8", "oof_macro": 0.6044, "cvthr_macro": 0.6027, "oof_p3": 0.799, "test_macro": 0.6112, "test_micro": 0.6729, "test_p3": 0.803, "test_p1": 0.9025, "w_svm": 0.8, "syarat": "OOF P@3 >= SVM saja"}
+{"name": "logit_bebas_w0.7", "oof_macro": 0.6054, "cvthr_macro": 0.6036, "oof_p3": 0.7979, "test_macro": 0.613, "test_micro": 0.6741, "test_p3": 0.8016, "test_p1": 0.9038, "w_svm": 0.7}
+{"name": "logit_p3dijaga_w0.9", "oof_macro": 0.6042, "cvthr_macro": 0.6027, "oof_p3": 0.7993, "test_macro": 0.6117, "test_micro": 0.6734, "test_p3": 0.8031, "test_p1": 0.9043, "w_svm": 0.9, "syarat": "OOF P@3 >= SVM saja"}
+{"name": "geo_bebas_w0.7", "oof_macro": 0.6053, "cvthr_macro": 0.6029, "oof_p3": 0.7958, "test_macro": 0.6138, "test_micro": 0.675, "test_p3": 0.797, "test_p1": 0.8973, "w_svm": 0.7}
+{"name": "geo_p3dijaga_w0.9", "oof_macro": 0.6042, "cvthr_macro": 0.6029, "oof_p3": 0.7995, "test_macro": 0.6119, "test_micro": 0.6728, "test_p3": 0.8024, "test_p1": 0.9041, "w_svm": 0.9, "syarat": "OOF P@3 >= SVM saja"}

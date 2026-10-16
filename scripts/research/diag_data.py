@@ -12,7 +12,7 @@ def gset(s):
         return frozenset()
     return frozenset(g.strip() for g in s.split(',') if g.strip())
 
-# --- dedup file sinopsis: sinopsis terpanjang menang (aturan data_contract) ---
+# dedup file sinopsis: sinopsis terpanjang menang (aturan data_contract)
 syn['_len'] = syn['summary'].fillna('').str.split().str.len()
 syn_d = syn.sort_values('_len', ascending=False).drop_duplicates('url', keep='first')
 print('syn unik url:', syn_d.shape[0], '| baris dibuang:', len(syn) - len(syn_d))
@@ -58,20 +58,20 @@ print('\ngenre yg ada di fact tapi tidak di syn (top 10):')
 for g, c in drop.most_common(10):
     print('   %-18s -%d' % (g, c))
 
-# --- kardinalitas label ---
+# kardinalitas label
 print('\n--- kardinalitas label ---')
 print('rata2 genre / novel  fact: %.2f | syn: %.2f' %
       (both.G_fact.str.len().mean(), both.G_syn.str.len().mean()))
 union = both.apply(lambda r: r.G_fact | r.G_syn, axis=1)
 print('rata2 genre / novel  UNION: %.2f' % union.str.len().mean())
 
-# --- distribusi genre keseluruhan ---
+# distribusi genre keseluruhan
 allg = Counter()
 for s in m.G_fact: allg.update(s)
 print('\ntotal genre unik:', len(allg), '| genre >=50 novel:',
       sum(1 for _, c in allg.items() if c >= 50))
 
-# --- sinopsis ---
+# sinopsis
 m['syn_words'] = m['summary'].fillna('').str.split().str.len()
 print('\n--- sinopsis ---')
 print('kosong        :', (m.syn_words == 0).sum())
@@ -94,7 +94,7 @@ def nonlatin_ratio(s):
 nl = m['summary'].fillna('').map(nonlatin_ratio)
 print('sinopsis >30%% karakter non-latin      : %d' % (nl > .3).sum())
 
-# --- tags ---
+# tags
 m['n_tags'] = m['tags'].fillna('').map(lambda s: len(gset(s)))
 print('\n--- tags ---')
 print('tags Unknown/kosong :', (m.n_tags == 0).sum())

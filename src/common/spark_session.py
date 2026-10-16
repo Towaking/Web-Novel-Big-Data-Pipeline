@@ -37,14 +37,20 @@ def _s3a_options(settings: Settings) -> dict:
         "spark.hadoop.fs.s3a.secret.key": minio.secret_key,
         # MinIO tidak mendukung virtual-host style bucket -> wajib path style.
         "spark.hadoop.fs.s3a.path.style.access": "true",
-        "spark.hadoop.fs.s3a.connection.ssl.enabled": "false",
+        # The JVM trusts the stack CA through JAVA_TOOL_OPTIONS (docker/tls/tls.env).
+        "spark.hadoop.fs.s3a.connection.ssl.enabled": str(minio.endpoint.startswith("https://")).lower(),
         "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
         "spark.hadoop.fs.s3a.aws.credentials.provider": (
             "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider"
         ),
-        # Commit v2: hindari rename direktori pada object storage
-        # (di S3 rename = copy + delete, mahal dan tidak atomik).
-        "spark.hadoop.fs.s3a.fast.upload": "true",
+        # Committer v2, sengaja BUKAN v1 bawaan Spark. v1 me-list
+        # `_temporary/0/` saat job commit, dan di bucket MinIO ber-versioning
+        # direktori task dari run sebelumnya (yang sudah dihapus, tinggal delete
+        # marker) tetap muncul sebagai prefix -> rename gagal dengan
+        # FileNotFoundException pada tulisan KEDUA ke path yang sama (terbukti
+        # 2026-10-06). Harga v2: job yang gagal di tengah bisa meninggalkan
+        # sebagian part-* tanpa _SUCCESS (SPARK-33019) - orchestrator berhenti
+        # di langkah itu, dan run ulang menimpa path tersebut.
         "spark.hadoop.mapreduce.fileoutputcommitter.algorithm.version": "2",
     }
 
@@ -53,9 +59,12 @@ def _tuning_options(settings: Settings) -> dict:
     """Tuning untuk dataset skala menengah pada cluster lokal."""
     spark_cfg = settings.spark
     options = {
-        # Dataset ~4.5k baris: 200 shuffle partition default Spark bikin
+        # Dataset ~40k baris: 200 shuffle partition default Spark bikin
         # overhead scheduling task jauh lebih mahal dari komputasinya.
         "spark.sql.shuffle.partitions": str(spark_cfg.shuffle_partitions),
+        # Progress bar konsol menempel ke baris log aplikasi (lewat \r) dan
+        # membuat log tidak bisa di-grep per baris.
+        "spark.ui.showConsoleProgress": "false",
         "spark.driver.memory": spark_cfg.driver_memory,
         "spark.executor.memory": spark_cfg.executor_memory,
         "spark.sql.adaptive.enabled": "true",
@@ -66,6 +75,8 @@ def _tuning_options(settings: Settings) -> dict:
         # kecil ditarik ke driver untuk visualisasi (Fase 5).
         "spark.sql.execution.arrow.pyspark.enabled": "true",
     }
+    if spark_cfg.cores_max:
+        options["spark.cores.max"] = spark_cfg.cores_max
     if spark_cfg.driver_host:
         options["spark.driver.host"] = spark_cfg.driver_host
         options["spark.driver.bindAddress"] = "0.0.0.0"
@@ -117,9 +128,61 @@ def build_spark_session(
     return spark
 
 
+#: Sesi bersama milik orchestrator. Bila `name` terisi, `spark_session()` memakai
+#: satu aplikasi Spark untuk semua langkah alih-alih membuat & menghentikan
+#: aplikasi baru per langkah (tiap aplikasi baru = peluncuran ulang executor di
+#: worker). Sesinya dibuat malas: langkah tanpa Spark (Fase 1) tidak memicunya.
+_SHARED: dict = {"name": None, "session": None}
+
+
+@contextmanager
+def shared_spark_session(app_name: str) -> Iterator[None]:
+    """Aktifkan sesi bersama untuk semua `spark_session()` di dalam blok ini."""
+    _SHARED.update(name=app_name, session=None)
+    try:
+        yield
+    finally:
+        session = _SHARED["session"]
+        _SHARED.update(name=None, session=None)
+        if session is not None:
+            session.stop()
+            logger.info("SparkSession bersama '%s' ditutup.", app_name)
+
+
+def restart_shared_session() -> None:
+    """Buang sesi bersama (mis. sebelum retry) supaya percobaan berikutnya mulai bersih."""
+    session = _SHARED["session"]
+    _SHARED["session"] = None
+    if session is not None:
+        session.stop()
+        logger.info("SparkSession bersama dihentikan - dibuat ulang pada langkah berikutnya.")
+
+
+def _release(spark: SparkSession) -> None:
+    """Kembalikan sesi bersama ke keadaan bersih: tanpa cache dan temp view langkah sebelumnya."""
+    spark.catalog.clearCache()
+    for table in spark.catalog.listTables():
+        if table.isTemporary:
+            spark.catalog.dropTempView(table.name)
+    spark.sparkContext.setLocalProperty("spark.jobGroup.id", None)
+    spark.sparkContext.setLocalProperty("spark.job.description", None)
+
+
 @contextmanager
 def spark_session(app_name: str, **kwargs) -> Iterator[SparkSession]:
     """Context manager: menjamin session ditutup walau job gagal di tengah."""
+    if _SHARED["name"] and not kwargs:
+        if _SHARED["session"] is None:
+            _SHARED["session"] = build_spark_session(_SHARED["name"])
+        spark = _SHARED["session"]
+        # Nama langkah tampil sebagai job group di Spark UI.
+        spark.sparkContext.setJobGroup(app_name, app_name)
+        try:
+            yield spark
+        finally:
+            _release(spark)
+        return
+
     spark = build_spark_session(app_name, **kwargs)
     try:
         yield spark

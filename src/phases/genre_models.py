@@ -19,6 +19,7 @@ from Model.pipeline.evaluate import evaluate, per_label_scores, precision_at_k, 
 from Model.pipeline.features import build_feature_union, text_branch as _text_branch
 from Model.pipeline.models import (
     ARCHITECTURES,
+    DEFAULT_MODELS,
     MODEL_CATALOG,
     PARAM_GRID,
     build_model,
@@ -28,7 +29,7 @@ from Model.pipeline.preprocessing import FEATURE_COLUMNS, stem_texts
 from Model.pipeline.train import out_of_fold_probabilities, split_indices, train_all
 
 __all__ = [
-    "ARCHITECTURES", "MODEL_CATALOG", "PARAM_GRID", "FEATURE_COLUMNS",
+    "ARCHITECTURES", "DEFAULT_MODELS", "MODEL_CATALOG", "PARAM_GRID", "FEATURE_COLUMNS",
     "MIN_GENRE_SUPPORT", "RANDOM_STATE", "TEST_SIZE",
     "build_model", "build_feature_union", "predict_proba_frame", "stem_texts",
     "evaluate", "tune_thresholds", "per_label_scores", "precision_at_k",

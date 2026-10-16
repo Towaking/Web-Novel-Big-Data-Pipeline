@@ -1,8 +1,8 @@
 """
 FASE 1 — COLLECT (Ingestion)
 ============================
-Memindahkan `Dataset/data_novel.csv` dari filesystem lokal ke landing zone
-data lake: `s3a://raw-data/novel/data_novel.csv`.
+Memindahkan `Dataset/novel_catalogue.csv` dari filesystem lokal ke landing zone
+data lake: `s3a://raw-data/novel/novel_catalogue.csv`.
 
 Prinsip yang dipegang di layer ingestion:
 
@@ -110,14 +110,13 @@ def ingest_file(source: Path, key: str, force: bool = False) -> dict:
             "Periksa bind-mount ./:/opt/project pada docker-compose.yml."
         )
 
-    # --- Langkah 1: sidik jari file sumber -------------------------------
+    # Sidik jari file sumber
     checksum = compute_md5(source)
-    rows = count_csv_rows(source)
     size_mb = source.stat().st_size / 1_048_576
-    logger.info("Sumber   : %s (%.2f MB, %s baris data)", source, size_mb, f"{rows:,}")
+    logger.info("Sumber   : %s (%.2f MB)", source, size_mb)
     logger.info("Checksum : md5=%s", checksum)
 
-    # --- Langkah 2: cek idempotensi --------------------------------------
+    # Cek idempotensi
     previous = read_remote_manifest(bucket, manifest_key)
     if previous and previous.get("md5") == checksum and not force:
         logger.info(
@@ -135,10 +134,14 @@ def ingest_file(source: Path, key: str, force: bool = False) -> dict:
             checksum[:8],
         )
 
-    # --- Langkah 3: upload -----------------------------------------------
+    # Dihitung setelah cek idempotensi: parse CSV multi-baris 40+ MB hanya
+    # berguna untuk manifest baru, bukan untuk upload yang dilewati.
+    rows = count_csv_rows(source)
+    logger.info("Baris data: %s", f"{rows:,}")
+
     object_uri = upload_file(source, bucket, key, settings)
 
-    # --- Langkah 4: verifikasi pasca-upload ------------------------------
+    # Verifikasi pasca-upload
     # Upload yang "sukses" tapi terpotong adalah kegagalan paling berbahaya
     # di layer ingestion: fase hilir jalan mulus di atas data tidak lengkap.
     head = get_s3_client(settings).head_object(Bucket=bucket, Key=key)
@@ -150,7 +153,7 @@ def ingest_file(source: Path, key: str, force: bool = False) -> dict:
         )
     logger.info("Verifikasi ukuran objek cocok (%s byte).", f"{remote_size:,}")
 
-    # --- Langkah 5: tulis manifest ---------------------------------------
+    # Tulis manifest
     manifest = build_manifest(source, checksum, rows, object_uri)
     get_s3_client(settings).put_object(
         Bucket=bucket,
@@ -164,15 +167,8 @@ def ingest_file(source: Path, key: str, force: bool = False) -> dict:
 
 def run(force: bool = False) -> dict:
     """
-    Ingest seluruh dataset sumber.
-
-    Ada dua sumber yang saling melengkapi (lihat `Doc/data_contract.md`):
-      * `data_novel.csv`           - metadata, rating, jumlah bab, tag
-      * `novel_dataset_scrapped.csv` - sinopsis, di-join lewat `url` di Fase 2
-
-    Keduanya diingest apa adanya ke zona raw; penggabungannya BUKAN urusan
-    fase ini. Landing zone harus tetap menjadi cerminan sumber, supaya
-    perubahan aturan join tidak menuntut ingestion ulang.
+    Ingest katalog sumber apa adanya ke zona raw. Landing zone tetap cerminan
+    sumber; pembersihan seluruhnya urusan Fase 2.
     """
     log_section(logger, "fase 1 - collect (ingestion ke minio)")
 

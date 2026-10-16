@@ -51,24 +51,53 @@ def stem_texts(texts) -> list[str]:
     return [" ".join(_stem_word(token) for token in doc.split()) for doc in series]
 
 
-def build_feature_frame(pdf: pd.DataFrame) -> pd.DataFrame:
+def rebuild_clean_text(pdf: pd.DataFrame, stopwords) -> tuple[list[str], list[str]]:
+    """
+    Bangun ulang `corpus_clean` dan `synopsis_clean` dari teks mentah.
+
+    Identik dengan kolom Fase 2 (diverifikasi pada 39.660 judul) kecuali sensor
+    yang dipulihkan, dan memakai tokenizer yang sama dengan jalur inferensi.
+    """
+    from src.common.text_prep import to_corpus
+
+    stop = set(stopwords)
+    title = pdf["title"].fillna("").astype(str)
+    synopsis = pdf["synopsis"].fillna("").astype(str)
+    tags = pdf["tags"].fillna("").astype(str)
+    corpus = [to_corpus(f"{t} {s} {g}", stop) for t, s, g in zip(title, synopsis, tags)]
+    return corpus, [to_corpus(s, stop) for s in synopsis]
+
+
+def build_feature_frame(pdf: pd.DataFrame, stopwords=None) -> pd.DataFrame:
     """
     Bentuk tabel masukan model dari data bersih Fase 2.
+
+    Dengan `stopwords` (Fase 4) teks dibangun ulang lewat `rebuild_clean_text`.
+    Tanpanya kolom Fase 2 dipakai apa adanya, supaya angka Fase 5 tetap dapat diulang.
 
     Kolomnya harus sama persis saat training dan inferensi; daftarnya dikunci
     di `FEATURE_COLUMNS`.
     """
     from Model.pipeline.embeddings import build_natural_text
+    from src.common.text_prep import tags_text
+
+    if stopwords is not None:
+        corpus, synopsis = rebuild_clean_text(pdf, stopwords)
+        tags = pdf["tags"].fillna("").map(tags_text)
+    else:
+        corpus = pdf["corpus_clean"].fillna("")
+        synopsis = pdf["synopsis_clean"].fillna("")
+        tags = pdf["tags"].fillna("").str.lower().str.replace(",", " ", regex=False)
 
     return pd.DataFrame(
         {
             # Gabungan judul + sinopsis + tag: menangkap kombinasi lintas-sumber.
-            "corpus_clean": pdf["corpus_clean"].fillna(""),
+            "corpus_clean": list(corpus),
             # Prosa saja: diberi ruang IDF sendiri agar kosakata sinopsis tidak
             # tertimbun frasa tag yang jauh lebih seragam.
-            "synopsis_clean": pdf["synopsis_clean"].fillna(""),
+            "synopsis_clean": list(synopsis),
             # Tag saja, koma diganti spasi agar bisa divektorkan sebagai teks.
-            "tags_clean": pdf["tags"].fillna("").str.lower().str.replace(",", " ", regex=False),
+            "tags_clean": list(tags),
             "type_origin": pdf["type_origin"].fillna("UNKNOWN"),
             "type": pdf["type"].fillna("UNKNOWN"),
             # Kalimat utuh untuk encoder pralatih — tanpa stemming maupun

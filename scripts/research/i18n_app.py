@@ -14,7 +14,7 @@ Q = '"'
 S = "'"
 
 APP_PAIRS = [
-    # ---------- docstring modul ----------
+    # docstring modul
     ('''"""
 NovelLens — antarmuka produk
 ============================
@@ -50,7 +50,7 @@ Data is read from materialised Spark SQL results (Phase 3); no Spark job runs
 from here, so interaction stays instant.
 """'''),
 
-    # ---------- konfigurasi halaman & CSS ----------
+    # konfigurasi halaman & CSS
     ('page_title="NovelLens — Intelijen Katalog Novel"',
      'page_title="NovelLens — Novel Catalogue Intelligence"'),
     ("# --- Identitas visual ---", "# --- Visual identity ---"),
@@ -62,7 +62,7 @@ from here, so interaction stays instant.
     ("/* --- Teks pendukung ---", "/* --- Supporting text ---"),
     ("/* --- Tab, tombol, tabel ---", "/* --- Tabs, buttons, tables ---"),
 
-    # ---------- lapisan data ----------
+    # lapisan data
     ("# Lapisan data", "# Data layer"),
     ('"""Data produk belum siap disajikan (pipeline belum dijalankan)."""',
      '"""Product data is not ready to serve yet (the pipeline has not run)."""'),
@@ -71,7 +71,7 @@ from here, so interaction stays instant.
     ('"""Cek ketersediaan penyimpanan data tanpa membocorkan detailnya ke UI."""',
      '"""Check storage availability without leaking its details into the UI."""'),
 
-    # ---------- komponen UI ----------
+    # komponen UI
     ("# Komponen UI", "# UI components"),
     ('"""Kepala halaman: label kecil, judul, satu kalimat penjelas."""',
      '"""Page header: eyebrow label, title, one explanatory sentence."""'),
@@ -88,7 +88,7 @@ from here, so interaction stays instant.
     ('cols[1].link_button("Buka", row["url"], use_container_width=True)',
      'cols[1].link_button("Open", row["url"], use_container_width=True)'),
 
-    # ---------- halaman ringkasan ----------
+    # halaman ringkasan
     ("# HALAMAN — Ringkasan", "# PAGE — Overview"),
     ('''        "Intelijen katalog untuk 4.461 judul web novel: apa yang dibaca orang, "
         "apa yang mereka nilai tinggi, dan judul apa yang sebaiknya direkomendasikan.",
@@ -134,7 +134,7 @@ from here, so interaction stays instant.
     ('.rename(columns={"title": "Judul", "weighted_rating": "Rating", "rating_votes": "Suara"})',
      '.rename(columns={"title": "Title", "weighted_rating": "Rating", "rating_votes": "Votes"})'),
 
-    # ---------- halaman analitik ----------
+    # halaman analitik
     ("# HALAMAN — Analitik Katalog", "# PAGE — Catalogue Analytics"),
     ('''        "Analitik katalog",
         "Struktur pasar novel terjemahan: komposisi genre, hubungan panjang cerita "
@@ -204,7 +204,7 @@ from here, so interaction stays instant.
     ('"""Render word cloud dengan latar transparan agar menyatu dengan tema."""',
      '"""Render the word cloud on a transparent ground so it blends with the theme."""'),
 
-    # ---------- AI Studio ----------
+    # AI Studio
     ("# HALAMAN — AI Studio", "# PAGE — AI Studio"),
     ('''CONTOH_SINOPSIS = (
     "Setelah dikhianati sekutunya dan tewas di puncak menara, seorang pendekar "
@@ -353,7 +353,7 @@ SAMPLE_TAGS = "Time Travel, Weak to Strong, Cultivation, Male Protagonist, Reven
             "cluster_id": "#", "size": "Titles", "avg_weighted_rating": "Rating",
             "avg_chapters": "Chapters", "terms": "Signature terms", "genre": "Dominant genres"}),'''),
 
-    # ---------- halaman metodologi ----------
+    # halaman metodologi
     ("# HALAMAN — Metodologi", "# PAGE — Methodology"),
     ('''        "Metodologi & keterbatasan",
         "Bagaimana angka di aplikasi ini dihitung, seberapa akurat modelnya, "
@@ -478,7 +478,7 @@ with multi-label handling via weighted per-label *binary cross-entropy*
   population.
 - Archetypes are overlapping groups, not hard partitions.'''),
 
-    # ---------- router & sidebar ----------
+    # router & sidebar
     ('''PAGES = {
     "Ringkasan": page_overview,
     "Analitik Katalog": page_analytics,
